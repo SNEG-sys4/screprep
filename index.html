@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ITガバナンス 戦略レポート</title>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/encoding-japanese/2.2.0/encoding.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family:'Meiryo','Yu Gothic','Noto Sans JP',sans-serif; background:#F0F4F8; color:#1e293b; font-size:14px; }
+.wrap { max-width:1280px; margin:0 auto; padding:20px 24px 60px; }
+.hero { background:linear-gradient(135deg,#1e3a5f,#2d6a9f); padding:24px 28px; border-radius:12px; margin-bottom:20px; box-shadow:0 4px 14px rgba(0,0,0,.18); }
+.hero h1 { color:#fff; font-size:1.4rem; font-weight:800; }
+.hero p  { color:#93c5fd; font-size:.86rem; margin-top:6px; }
+.panel { background:#fff; border-radius:12px; padding:20px 22px; margin-bottom:18px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+.panel h2 { font-size:1.05rem; color:#1e3a5f; margin-bottom:14px; }
+.uploads { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+.up-box { border:2px dashed #cbd5e1; border-radius:10px; padding:16px; text-align:center; transition:.2s; background:#f8fafc; }
+.up-box.filled { border-color:#059669; background:#ecfdf5; }
+.up-box label { font-weight:700; font-size:.85rem; color:#334155; display:block; margin-bottom:10px; }
+.up-box input[type=file] { font-size:.78rem; width:100%; }
+.up-box .fn { font-size:.75rem; color:#059669; margin-top:8px; word-break:break-all; }
+.btn { border:none; border-radius:8px; padding:11px 20px; font-family:inherit; font-weight:700; font-size:.9rem; cursor:pointer; transition:.2s; }
+.btn-primary { background:#2563EB; color:#fff; }
+.btn-primary:hover { background:#1d4ed8; }
+.btn-primary:disabled { background:#94a3b8; cursor:not-allowed; }
+.btn-ghost { background:#eef2ff; color:#3730a3; }
+.btn-ghost:hover { background:#e0e7ff; }
+.btn-row { display:flex; gap:12px; flex-wrap:wrap; margin-top:16px; }
+.status-msg { padding:12px 16px; border-radius:8px; font-size:.85rem; margin-top:14px; }
+.status-info { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; }
+.status-ok   { background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; }
+.status-err  { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }
+.filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+.filter-item label { font-size:.78rem; font-weight:700; color:#475569; display:block; margin-bottom:6px; }
+.multi { border:1px solid #cbd5e1; border-radius:8px; max-height:130px; overflow-y:auto; padding:6px 8px; background:#fff; }
+.multi div { font-size:.8rem; padding:2px 0; }
+.multi input { margin-right:6px; }
+.slider-val { font-weight:800; color:#2563EB; }
+input[type=range] { width:100%; }
+.tabnav { display:flex; background:linear-gradient(135deg,#1e3a5f,#2d6a9f); border-radius:12px; overflow:hidden; margin-bottom:20px; box-shadow:0 4px 12px rgba(0,0,0,.2); }
+.tabnav button { flex:1; padding:14px 6px; border:none; background:transparent; color:#93c5fd; font-size:.82rem; font-weight:700; cursor:pointer; font-family:inherit; border-right:1px solid #ffffff22; transition:.2s; }
+.tabnav button:last-child { border-right:none; }
+.tabnav button.active { background:rgba(255,255,255,.15); color:#fff; }
+.tabnav button:hover { background:rgba(255,255,255,.1); color:#fff; }
+.tabpage { display:none; }
+.tabpage.active { display:block; }
+.grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.score-card { border-radius:10px; padding:16px; text-align:center; border:2px solid; }
+.score-card .lbl { font-size:.76rem; font-weight:700; color:#64748b; margin-bottom:4px; }
+.score-card .val { font-size:2rem; font-weight:900; }
+.score-card .bd  { font-size:.72rem; font-weight:700; margin-top:4px; }
+.metric-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+.metric { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px 16px; }
+.metric .m-lbl { font-size:.76rem; color:#64748b; font-weight:700; }
+.metric .m-val { font-size:1.5rem; font-weight:900; color:#1e293b; margin-top:4px; }
+.sia { border-radius:12px; padding:20px; margin-bottom:16px; border:2px solid; }
+.sia .head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.sia .title { font-weight:800; font-size:1.02rem; color:#1e293b; }
+.sia .badge { margin-left:auto; color:#fff; padding:3px 12px; border-radius:20px; font-size:.74rem; font-weight:700; white-space:nowrap; }
+.sia .metric-big { font-size:2rem; font-weight:900; margin:6px 0; }
+.sia .st { font-size:.84rem; font-weight:700; color:#475569; }
+.sia hr { border:none; border-top:1px solid #00000018; margin:12px 0; }
+.sia .k { font-size:.72rem; font-weight:800; letter-spacing:1px; }
+.sia .v { font-size:.87rem; color:#334155; margin:4px 0 10px; line-height:1.7; }
+.chart-box { background:#fff; border-radius:10px; padding:12px; box-shadow:0 2px 8px rgba(0,0,0,.06); margin-bottom:16px; }
+.sec-title { font-size:1rem; font-weight:800; color:#1e3a5f; margin:18px 0 10px; padding:8px 12px; background:#fff; border-left:4px solid #1e3a5f; border-radius:6px; }
+.note-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin:12px 0; font-size:.83rem; line-height:1.7; }
+.warn-box { background:#fef2f2; border-left:5px solid #DC2626; border-radius:6px; padding:14px 18px; margin:12px 0; font-size:.85rem; line-height:1.8; }
+table.dt { width:100%; border-collapse:collapse; font-size:.8rem; background:#fff; }
+table.dt th { background:#1F3864; color:#fff; padding:8px 10px; text-align:left; font-weight:700; position:sticky; top:0; }
+table.dt td { padding:6px 10px; border-bottom:1px solid #e2e8f0; }
+table.dt tr:nth-child(even) td { background:#f8fafc; }
+.table-scroll { max-height:380px; overflow:auto; border:1px solid #e2e8f0; border-radius:8px; }
+.hint { color:#64748b; font-size:.8rem; margin:6px 0 14px; }
+.hidden { display:none !important; }
+.rep-cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.rep-sec { border:1px solid #e2e8f0; border-radius:10px; padding:14px; margin-bottom:12px; background:#fff; }
+.rep-sec summary { font-weight:800; cursor:pointer; color:#1e3a5f; }
+.rep-sec label { display:block; font-size:.83rem; margin:8px 0 2px; }
+.rep-sec textarea { width:100%; min-height:60px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; font-family:inherit; font-size:.82rem; }
+.chk { font-size:.83rem; display:flex; align-items:center; gap:6px; margin:6px 0; }
+.spinner { display:inline-block; width:16px; height:16px; border:3px solid #cbd5e1; border-top-color:#2563EB; border-radius:50%; animation:spin .8s linear infinite; vertical-align:middle; margin-right:8px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <h1>🏛️ ITガバナンス 戦略レポート</h1>
+    <p>経営リスク回避 ／ IT資産最適化 ／ 組織健全性の可視化 ── 経営幹部向け四半期評価レポート</p>
+  </div>
+
+  <div class="panel" id="upload-panel">
+    <h2>① ファイルを取り込む（ブラウザ内に蓄積）</h2>
+    <p class="hint" style="margin-top:-6px">取り込んだデータはこのブラウザ内に自動保存され、次回以降も保持されます。新しい月ぶんだけ追加取込も可能（3枠すべてを毎回入れる必要はありません）。同じ月の再取込は上書き。</p>
+    <div id="store-status" class="status-msg status-info">💾 保管データ：読込中…</div>
+    <div class="uploads">
+      <div class="up-box" id="box-hw">
+        <label>🖥️ ハードウェア台帳（.csv / .xlsx）</label>
+        <input type="file" id="file-hw" accept=".csv,.xlsx">
+        <div class="fn" id="fn-hw"></div>
+      </div>
+      <div class="up-box" id="box-pc">
+        <label>⏱️ 初回最終_PC_使用ログ一覧（.csv / .xlsx）</label>
+        <input type="file" id="file-pc" accept=".csv,.xlsx">
+        <div class="fn" id="fn-pc"></div>
+      </div>
+      <div class="up-box" id="box-ac">
+        <label>🌐 アクセスログCSV（複数月・同名OK）</label>
+        <input type="file" id="file-ac" accept=".csv" multiple>
+        <div class="fn" id="fn-ac"></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-analyze" disabled>📥 取り込んで保存・更新</button>
+      <button class="btn btn-ghost" id="btn-backup">💾 バックアップ書出し</button>
+      <label class="btn btn-ghost" style="cursor:pointer">📂 バックアップ読込<input type="file" id="file-backup" accept=".json" class="hidden"></label>
+      <button class="btn btn-ghost" id="btn-clear" style="color:#b91c1c">🗑️ 全データ消去</button>
+    </div>
+    <div id="upload-status"></div>
+  </div>
+
+  <div id="app-body" class="hidden">
+
+    <div class="panel">
+      <h2>🔧 レポート設定</h2>
+      <div class="filters">
+        <div class="filter-item"><label>対象月（四半期）</label><div class="multi" id="f-months"></div></div>
+        <div class="filter-item"><label>対象会社</label><div class="multi" id="f-companies"></div></div>
+        <div class="filter-item"><label>対象グループ</label><div class="multi" id="f-groups"></div></div>
+        <div class="filter-item">
+          <label>時間外稼働：終了時刻 <span class="slider-val" id="v-ot">20</span>時</label>
+          <input type="range" id="s-ot" min="17" max="23" value="20">
+          <label style="margin-top:12px">深夜稼働：開始時刻 <span class="slider-val" id="v-ln">22</span>時</label>
+          <input type="range" id="s-ln" min="20" max="24" value="22">
+        </div>
+      </div>
+    </div>
+
+    <div class="tabnav">
+      <button data-tab="t1" class="active">🏛️ サマリー</button>
+      <button data-tab="t2">🔒 リスク遮断</button>
+      <button data-tab="t3">🌐 Webガバナンス</button>
+      <button data-tab="t4">⚡ PC稼働</button>
+      <button data-tab="t5">📥 レポート出力</button>
+      <button data-tab="t6">🔮 リスク予測</button>
+      <button data-tab="t7">🎯 ★3評価</button>
+    </div>
+
+    <div id="t1" class="tabpage active"></div>
+    <div id="t2" class="tabpage"></div>
+    <div id="t3" class="tabpage"></div>
+    <div id="t4" class="tabpage"></div>
+    <div id="t5" class="tabpage"></div>
+    <div id="t6" class="tabpage"></div>
+    <div id="t7" class="tabpage"></div>
+
+  </div>
+</div>
+
+<script>window.App = window.App || {};</script>
+<script src="data-core.js"></script>
+<script src="db.js"></script>
+<script src="charts.js"></script>
+<script src="render.js"></script>
+<script src="exports.js"></script>
+<script src="trends.js"></script>
+<script src="gap.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
