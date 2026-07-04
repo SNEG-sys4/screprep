@@ -222,9 +222,15 @@
 
   // TAB5/6 は exports.js / trends.js が定義（renderT5, renderT6 を上書き）
   function renderAll(){
-    renderT1(); renderT2(); renderT3(); renderT4();
-    if(global.renderT5) global.renderT5();
-    if(global.renderT6) global.renderT6();
+    const steps=[['t1',renderT1],['t2',renderT2],['t3',renderT3],['t4',renderT4]];
+    if(global.renderT5) steps.push(['t5',global.renderT5]);
+    if(global.renderT6) steps.push(['t6',global.renderT6]);
+    for(const s of steps){
+      try{ s[1](); }
+      catch(e){ console.error('render '+s[0], e);
+        const el=document.getElementById(s[0]);
+        if(el) el.innerHTML='<div class="status-msg status-err">この画面の描画でエラーが発生しました：'+((e&&e.message)||e)+'</div>'; }
+    }
   }
 
   global.Render = { renderT1,renderT2,renderT3,renderT4,renderAll, badge, esc, tableHtml, siaCard, scoreCard, metric, chartBox, plot, fmtInt };
