@@ -209,6 +209,7 @@
     if(!App.outCompanies.length) App.outCompanies=App.allCompanies.slice();
 
     global.Render.renderAll();
+    buildAiExcludeUI(); // renderAll後にイベントリスナーを再登録
   }
 
   // ── タブ切替 ──
