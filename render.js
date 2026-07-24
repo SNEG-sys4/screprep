@@ -137,19 +137,33 @@
     const k=App.kpis, ac=App.ac_web_f||App.ac_f, mj=App.monthsJp;
     const web=ac.filter(r=>r['Webアクセス'] && !isNil(r['リスク分類']));
     const exDeptN=(App.aiExcludeDepts||[]).length;
-    let html = `<div class="sec-title">🌐 Webアクセス：ガバナンス健全度分析</div>
-      <p class="hint">目的：特定個人の監視ではなく、カテゴリ別アクセス傾向によるガバナンス状態の可視化</p>
-      <div class="metric-row">${metric('Webアクセス総数',fmtInt(k.total_web))}${metric('高リスク件数',fmtInt(k.high_risk_count)+`（${k.total_web?round(k.high_risk_count/k.total_web*100,1):0}%）`)}${metric('中リスク件数',fmtInt(k.medium_risk_count)+`（${k.total_web?round(k.medium_risk_count/k.total_web*100,1):0}%）`)}${metric('ガバナンス健全度',k.governance_score+'点')}</div>
-      <div class="note-box"><b>🔎 中リスクの内訳（どちらが原因か）：</b> SNS ${fmtInt(k.sns_count||0)}件 ／ AI（生成AI）${fmtInt(k.ai_count||0)}件　→ <b style="color:#b45309">${(k.ai_count||0)>=(k.sns_count||0)?'生成AIが主因':'SNSが主因'}</b></div>
-      ${exDeptN?`<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ 部署除外を適用中：</b>「レポート設定」の野良AIチェックで選択されたユーザーが所属する部署（${esc((App.aiExcludeDepts||[]).join('・'))}）を、このタブの集計・グラフから除外して表示しています。</div>`:''}
-      <div class="note-box"><b>リスク分類の定義：</b>
-        🔴 <b>高リスク(3)</b> 転送・クラウドストレージ：情報漏洩・持ち出しリスク ／
-        🟡 <b>中リスク(2)</b> SNS・AI外部：情報拡散・機密入力リスク ／
-        🔵 <b>低リスク(1)</b> 動画・ショッピング：生産性への影響 ／ ⚪ <b>その他(0)</b></div>
-      <div class="grid2">${chartBox('c3-cat')}${chartBox('c3-month')}</div>
-      <div class="sec-title">会社別 ガバナンス健全度スコア</div>${chartBox('c3-comp')}<div id="c3-comptable"></div>
-      <div class="sec-title">部署別 リスクカテゴリ傾向（組織単位）</div>${chartBox('c3-dept')}`;
-    document.getElementById('t3').innerHTML=html;
+    const t3el=document.getElementById('t3');
+    // 初回のみ静的なHTML骨格（グラフコンテナ含む）を生成。2回目以降はDOM再生成しない
+    if(!t3el.dataset.init){
+      t3el.dataset.init='1';
+      t3el.innerHTML = `<div class="sec-title">🌐 Webアクセス：ガバナンス健全度分析</div>
+        <p class="hint">目的：特定個人の監視ではなく、カテゴリ別アクセス傾向によるガバナンス状態の可視化</p>
+        <div id="t3-metrics" class="metric-row"></div>
+        <div id="t3-midnote" class="note-box"></div>
+        <div id="t3-exnote"></div>
+        <div class="note-box"><b>リスク分類の定義：</b>
+          🔴 <b>高リスク(3)</b> 転送・クラウドストレージ：情報漏洩・持ち出しリスク ／
+          🟡 <b>中リスク(2)</b> SNS・AI外部：情報拡散・機密入力リスク ／
+          🔵 <b>低リスク(1)</b> 動画・ショッピング：生産性への影響 ／ ⚪ <b>その他(0)</b></div>
+        <div class="grid2">${chartBox('c3-cat')}${chartBox('c3-month')}</div>
+        <div class="sec-title">会社別 ガバナンス健全度スコア</div>${chartBox('c3-comp')}<div id="c3-comptable"></div>
+        <div class="sec-title">部署別 リスクカテゴリ傾向（組織単位）</div><div id="c3-dept-wrap">${chartBox('c3-dept')}</div>`;
+    }
+    // 動的部分のみ毎回更新
+    document.getElementById('t3-metrics').innerHTML =
+      metric('Webアクセス総数',fmtInt(k.total_web))+
+      metric('高リスク件数',fmtInt(k.high_risk_count)+`（${k.total_web?round(k.high_risk_count/k.total_web*100,1):0}%）`)+
+      metric('中リスク件数',fmtInt(k.medium_risk_count)+`（${k.total_web?round(k.medium_risk_count/k.total_web*100,1):0}%）`)+
+      metric('ガバナンス健全度',k.governance_score+'点');
+    document.getElementById('t3-midnote').innerHTML =
+      `<b>🔎 中リスクの内訳（どちらが原因か）：</b> SNS ${fmtInt(k.sns_count||0)}件 ／ AI（生成AI）${fmtInt(k.ai_count||0)}件　→ <b style="color:#b45309">${(k.ai_count||0)>=(k.sns_count||0)?'生成AIが主因':'SNSが主因'}</b>`;
+    document.getElementById('t3-exnote').innerHTML = exDeptN
+      ? `<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ 部署除外を適用中：</b>「レポート設定」の野良AIチェックで選択されたユーザーが所属する部署（${esc((App.aiExcludeDepts||[]).join('・'))}）を、このタブの集計・グラフから除外して表示しています。</div>` : '';
 
     plot('c3-cat', CH.figCategoryBar(web));
     plot('c3-month', CH.figMonthlyCategory(web, mj));
@@ -158,7 +172,15 @@
       document.getElementById('c3-comptable').innerHTML = tableHtml(['会社名','スコア','総アクセス','高リスク','判定'],
         cg._scores.map(s=>[s.comp,s.score,s.total,s.high, badge(s.level)[0]+' '+badge(s.level)[1]]));
     }
-    const dr=CH.figDeptRisk(web); if(dr._empty){ document.getElementById('c3-dept').outerHTML='<div class="status-msg status-info">中〜高リスクアクセスは検出されていません</div>'; } else plot('c3-dept',dr);
+    // 部署別グラフ：空の場合はwrapperにメッセージ、それ以外はplot
+    const dr=CH.figDeptRisk(web);
+    const deptWrap=document.getElementById('c3-dept-wrap');
+    if(dr._empty){
+      deptWrap.innerHTML='<div class="status-msg status-info">中〜高リスクアクセスは検出されていません</div>';
+    } else {
+      if(!document.getElementById('c3-dept')) deptWrap.innerHTML=chartBox('c3-dept');
+      plot('c3-dept',dr);
+    }
   }
 
   // ══ TAB4 PC稼働 ══
