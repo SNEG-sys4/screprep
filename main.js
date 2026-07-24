@@ -11,6 +11,7 @@
     cfg:{LATE_NIGHT_START:22, EARLY_MORNING_END:6, OVERTIME_THRESHOLD:20}, longThreshold:12,
     allMonths:[], allCompanies:[], allGroups:[],
     sel:{months:[],companies:[],groups:[]},
+    aiExcludeUsers:[], aiExcludeDepts:[],
   });
 
   // ── 汎用ダウンロード ──
@@ -142,6 +143,40 @@
     const ot=document.getElementById('s-ot'), ln=document.getElementById('s-ln');
     ot.oninput=()=>{ App.cfg.OVERTIME_THRESHOLD=+ot.value; document.getElementById('v-ot').textContent=ot.value; applyFilters(); };
     ln.oninput=()=>{ App.cfg.LATE_NIGHT_START=+ln.value; document.getElementById('v-ln').textContent=ln.value; applyFilters(); };
+    buildAiExcludeUI();
+  }
+  // チェック状態→App.aiExcludeUsers／App.aiExcludeDepts を更新するだけ（再描画はしない＝初期構築用）
+  function _computeAiExcludeState(){
+    const ids=[]; document.querySelectorAll('#f-aiexclude input.ai-ex:checked').forEach(cb=>ids.push(cb.value));
+    App.aiExcludeUsers=ids;
+    try{ if(window.localStorage) localStorage.setItem('aiExcludeUsers', ids.join(',')); }catch(e){}
+    const byVal=App._userDeptByVal||{};
+    const depts=new Set();
+    ids.forEach(v=>{ const d=byVal[v]; if(d) depts.add(d); });
+    App.aiExcludeDepts=[...depts];
+  }
+  // チェック変更時：状態更新＋再計算・再描画（画面・レポートにリアルタイム反映。連続クリックはデバウンス）
+  function _syncAiExclude(){ _computeAiExcludeState(); clearTimeout(filterTimer); filterTimer=setTimeout(applyFilters,250); }
+  function buildAiExcludeUI(){
+    const el=document.getElementById('f-aiexclude'); if(!el) return;
+    const esc=(global.Render&&global.Render.esc)?global.Render.esc:(s=>String(s==null?'':s));
+    const ac=App.ac||[], hw=App.hw||[];
+    const aiRows=ac.filter(r=>r['Webアクセス'] && r['リスク分類']==='AI・外部サービス');
+    const cntId={}, cntNm={};
+    aiRows.forEach(r=>{ const id=r.login_id!=null?String(r.login_id).trim().toLowerCase():''; if(id&&id!=='nan')cntId[id]=(cntId[id]||0)+1; const nm=r['台帳_氏名']!=null?String(r['台帳_氏名']).trim():''; if(nm)cntNm[nm]=(cntNm[nm]||0)+1; });
+    const map={};
+    function addU(rawId,rawNm,rawDep){ let id=rawId!=null?String(rawId).trim().toLowerCase():''; if(id==='nan')id=''; const nm=rawNm!=null?String(rawNm).trim():''; const dep=rawDep!=null?String(rawDep).trim():''; if(!id&&!nm)return; const key=id||('n:'+nm); if(!map[key])map[key]={val:(id||nm),id:id,name:nm,dept:dep,n:(id?(cntId[id]||0):(cntNm[nm]||0))}; else{ if(!map[key].name&&nm)map[key].name=nm; if(!map[key].dept&&dep)map[key].dept=dep; } }
+    ac.forEach(r=>addU(r.login_id,r['台帳_氏名'],r['台帳_部署名']));
+    hw.forEach(h=>addU(h.login_id,h.user_name,h['部署名']));
+    const users=Object.values(map).sort((a,b)=> b.n-a.n || String(a.name||a.val).localeCompare(String(b.name||b.val),'ja'));
+    // チェック対象値 → 所属部署 の対応表（Webガバナンスからの部署連動除外に使用）
+    const byVal={}; users.forEach(u=>{ if(u.dept) byVal[u.val]=u.dept; });
+    App._userDeptByVal=byVal;
+    let set=new Set();
+    try{ const raw=(window.localStorage&&localStorage.getItem('aiExcludeUsers'))||''; set=new Set(raw.split(/[\n,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean)); }catch(e){}
+    el.innerHTML = users.length ? users.map(u=>`<div><label><input type="checkbox" class="ai-ex" value="${esc(u.val)}" ${set.has(String(u.val).toLowerCase())?'checked':''}> ${esc(u.name||u.id||'(不明)')}${(u.id&&u.name)?'（'+esc(u.id)+'）':''}${u.dept?' ['+esc(u.dept)+']':''} — AI ${u.n}件</label></div>`).join('') : '<div style="color:#64748b;font-size:.8rem">ユーザーがいません。</div>';
+    el.querySelectorAll('input.ai-ex').forEach(cb=>cb.addEventListener('change', _syncAiExclude));
+    _computeAiExcludeState();
   }
   let filterTimer=null;
   function toggle(arr,v,on){ const i=arr.indexOf(v); if(on&&i<0)arr.push(v); if(!on&&i>=0)arr.splice(i,1);
@@ -160,6 +195,10 @@
 
     App.months=selM.slice().sort(); App.monthsJp=App.months.map(m=>DC.fmtMonth(m));
     App.kpis=DC.calcGovernanceKpis(App.pc_f, App.ac_f, App.hw_f);
+    // 野良AI除外対象ユーザーの所属部署を、Webガバナンスの集計・グラフからだけ除外（リアルタイム連動）
+    const exDepts=new Set(App.aiExcludeDepts||[]);
+    App.ac_web_f = exDepts.size ? App.ac_f.filter(r=>!exDepts.has(r['台帳_部署名'])) : App.ac_f;
+    Object.assign(App.kpis, DC.computeWebGovernance(App.ac_web_f));
     App.monthlyKpis=[];
     for(const m of App.months){ const pcm=App.pc_f.filter(r=>r['月']===m), acm=App.ac_f.filter(r=>r['月']===m);
       if(pcm.length===0 && acm.length===0) continue;
@@ -179,6 +218,10 @@
     b.classList.add('active'); document.getElementById(b.dataset.tab).classList.add('active');
     window.dispatchEvent(new Event('resize'));
   }));
+
+  // ── レポート設定の表示/非表示 ──
+  (function(){ const t=document.getElementById('settings-toggle'), b=document.getElementById('settings-body'), c=document.getElementById('settings-caret');
+    if(t&&b) t.addEventListener('click',()=>{ const hidden=b.classList.toggle('hidden'); if(c) c.textContent=hidden?'［表示する ▼］':'［非表示にする ▲］'; }); })();
 
   // ── 初期化：保管データがあれば自動表示 ──
   DB.open().then(loadFromStore).catch(e=>{ const st=document.getElementById('store-status');

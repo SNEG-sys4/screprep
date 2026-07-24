@@ -131,8 +131,9 @@ table.dt tr:nth-child(even) td { background:#f8fafc; }
 
   <div id="app-body" class="hidden">
 
-    <div class="panel">
-      <h2>🔧 レポート設定</h2>
+    <div class="panel" id="settings-panel">
+      <h2 id="settings-toggle" style="cursor:pointer;user-select:none">🔧 レポート設定　<span id="settings-caret" style="font-size:.75rem;font-weight:400;color:#64748b">［クリックで表示/非表示］</span></h2>
+      <div id="settings-body">
       <div class="filters">
         <div class="filter-item"><label>対象月（四半期）</label><div class="multi" id="f-months"></div></div>
         <div class="filter-item"><label>対象会社</label><div class="multi" id="f-companies"></div></div>
@@ -143,6 +144,12 @@ table.dt tr:nth-child(even) td { background:#f8fafc; }
           <label style="margin-top:12px">深夜稼働：開始時刻 <span class="slider-val" id="v-ln">22</span>時</label>
           <input type="range" id="s-ln" min="20" max="24" value="22">
         </div>
+      </div>
+      <div style="margin-top:16px">
+        <label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:4px">🤖 野良AI：カウントしないユーザー（取り込んだ全ユーザー・生成AI利用件数つき）</label>
+        <p class="hint" style="margin:0 0 6px">チェックした人の生成AI（ChatGPT等）アクセスを、レポートの「野良AI（無許可）」件数から除外します。<b>加えて、チェックした人が所属する部署は、Webガバナンス（②カード・Webガバナンスタブ）の集計・グラフからも除外</b>されます（部署単位でシステム部門等のAI利用が上位部署の数値を押し上げてしまう問題への対応。リスク遮断・PC稼働・リスク予測には影響しません）。選択はこの端末に記憶され、変更すると画面・レポートに即時反映されます。</p>
+        <div class="multi" id="f-aiexclude" style="max-height:200px"></div>
+      </div>
       </div>
     </div>
 
@@ -172,6 +179,7 @@ table.dt tr:nth-child(even) td { background:#f8fafc; }
 <script src="db.js"></script>
 <script src="charts.js"></script>
 <script src="render.js"></script>
+<script src="riskcalc.js"></script>
 <script src="exports.js"></script>
 <script src="trends.js"></script>
 <script src="gap.js"></script>

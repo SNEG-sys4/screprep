@@ -277,10 +277,34 @@
   function uniqueCount(rows, keyFn){ const s = new Set(); for(const r of rows){ const k=keyFn(r); if(!isNil(k)) s.add(k);} return s.size; }
   function round(v, n){ const f = Math.pow(10,n||0); return Math.round(v*f)/f; }
 
+  // ── ②Webガバナンス健全度（部署除外を適用したacを渡せば、その除外を反映した集計を返す） ──
+  function computeWebGovernance(ac) {
+    const kpis = {};
+    const web = ac.filter(r => r['Webアクセス']);
+    if (web.length > 0) {
+      const totalWeb = web.length;
+      const riskWeighted = sum(web.map(r => r['リスクレベル']));
+      const maxPossible = totalWeb * 3;
+      const density = maxPossible > 0 ? riskWeighted / maxPossible : 0;
+      kpis.governance_score = round((1 - density) * 100, 1);
+      const catCounts = {};
+      for (const r of web) { if (!isNil(r['リスク分類'])) catCounts[r['リスク分類']] = (catCounts[r['リスク分類']]||0)+1; }
+      kpis.cat_counts = catCounts;
+      kpis.total_web = totalWeb;
+      kpis.high_risk_count = web.filter(r => r['リスクレベル']===3).length;
+      kpis.medium_risk_count = web.filter(r => r['リスクレベル']===2).length;
+      kpis.sns_count = catCounts['SNS']||0;
+      kpis.ai_count = catCounts['AI・外部サービス']||0;
+    } else {
+      kpis.governance_score = 100.0; kpis.cat_counts = {}; kpis.total_web = 0;
+      kpis.high_risk_count = 0; kpis.medium_risk_count = 0; kpis.sns_count = 0; kpis.ai_count = 0;
+    }
+    return kpis;
+  }
+
   // ── KPI計算エンジン（app.py calc_governance_kpis 忠実移植） ──
   function calcGovernanceKpis(pc, ac, hw) {
     const kpis = {};
-    const web = ac.filter(r => r['Webアクセス']);
 
     // ① リスク遮断完遂率
     const blockEvents = ac.filter(r => /監視|遮断|禁止/.test(strip(r['種類'])));
@@ -295,22 +319,7 @@
     kpis.blocked_count = blockedCount;
 
     // ② ガバナンス健全度
-    if (web.length > 0) {
-      const totalWeb = web.length;
-      const riskWeighted = sum(web.map(r => r['リスクレベル']));
-      const maxPossible = totalWeb * 3;
-      const density = maxPossible > 0 ? riskWeighted / maxPossible : 0;
-      kpis.governance_score = round((1 - density) * 100, 1);
-      const catCounts = {};
-      for (const r of web) { if (!isNil(r['リスク分類'])) catCounts[r['リスク分類']] = (catCounts[r['リスク分類']]||0)+1; }
-      kpis.cat_counts = catCounts;
-      kpis.total_web = totalWeb;
-      kpis.high_risk_count = web.filter(r => r['リスクレベル']===3).length;
-      kpis.medium_risk_count = web.filter(r => r['リスクレベル']===2).length;
-    } else {
-      kpis.governance_score = 100.0; kpis.cat_counts = {}; kpis.total_web = 0;
-      kpis.high_risk_count = 0; kpis.medium_risk_count = 0;
-    }
+    Object.assign(kpis, computeWebGovernance(ac));
 
     // ③ 業務偏重指数
     const deptGroups = groupBy(pc.filter(r=>!isNil(r['台帳_部署名'])), r=>r['台帳_部署名']);
@@ -353,6 +362,6 @@
     isNil, classifyUrl, fmtMonth, getStatus, parsePcDate, hmToMinutes, combineDateTime,
     ymKey, parseDateLoose, num, strip,
     loadHw, loadPc, recomputePcFlags, loadAc, joinLedgers,
-    groupBy, mean, sum, uniqueCount, round, calcGovernanceKpis,
+    groupBy, mean, sum, uniqueCount, round, calcGovernanceKpis, computeWebGovernance,
   };
 });

@@ -45,9 +45,11 @@
     const ir=k.interception_rate, gs=k.governance_score, wc=k.workload_concentration, ln=k.latenight_rate;
     const irS=DC.getStatus(ir,'risk_interception_rate',true), gsS=DC.getStatus(gs,'governance_score',true),
           wcS=DC.getStatus(wc,'workload_concentration',false), lnS=DC.getStatus(ln,'latenight_rate',false);
-    const hr=k.high_risk_count, mr=k.medium_risk_count, tw=k.total_web;
+    const hr=k.high_risk_count, mr=k.medium_risk_count, tw=k.total_web, sns=k.sns_count||0, ai=k.ai_count||0;
     const highCats=Object.keys(DC.SITE_GOVERNANCE).filter(c=>DC.SITE_GOVERNANCE[c].risk===3 && (k.cat_counts||{})[c]>0);
     const highStr=highCats.length?highCats.join('・'):'なし';
+    const exDepts=App.aiExcludeDepts||[];
+    const exNote=exDepts.length?`　※部署除外適用中（${esc(exDepts.join('・'))}を除く）`:'';
 
     let html = `<div class="sec-title">📋 ITガバナンス評価サマリー ｜ 対象期間：${period}</div>`;
     html += `<div class="grid4">
@@ -65,7 +67,7 @@
         : '未対応イベントの原因を確認し、ポリシーの見直しを次回の改訂サイクルに組み込みます。まずは管理者側での事実確認から始めましょう。', ir,'%');
 
     html += siaCard(gsS,'② Webアクセス：ガバナンス健全度スコア',
-      `全Webアクセス ${fmtInt(tw)}件 ／ 高リスク ${fmtInt(hr)}件（${tw?round(hr/tw*100,1):0}%）中リスク ${fmtInt(mr)}件（${tw?round(mr/tw*100,1):0}%）`,
+      `全Webアクセス ${fmtInt(tw)}件 ／ 高リスク ${fmtInt(hr)}件（${tw?round(hr/tw*100,1):0}%）／ 中リスク ${fmtInt(mr)}件（SNS ${fmtInt(sns)}件・AI ${fmtInt(ai)}件／${ai>=sns?'AIが主因':'SNSが主因'}）${exNote}`,
       highCats.length ? `高リスクカテゴリとして検出されたサービスは「${highStr}」です。これらは情報の外部持ち出しやデータ漏洩につながる可能性があります。特定の個人を問題視するのではなく、「そういう状況が起きやすい環境になっていないか」という視点で考えることが重要です。`
         : 'SNSや動画サービスへのアクセスが一定数みられますが、業務に必要なケースもあるため、組織全体の傾向として把握しておく程度で問題ありません。現在のガバナンス状態は概ね良好です。',
       gsS!=='green' ? `「${highStr}」の利用が業務上必要なものかどうか、まず部門ごとの傾向を確認します。必要であればホワイトリスト登録を検討し、そうでなければ利用ガイドラインの周知を行います。強制ブロックより先に「なぜ使われているか」を把握するのがスムーズな対応につながります。`
@@ -132,11 +134,14 @@
 
   // ══ TAB3 Webガバナンス ══
   function renderT3(){
-    const k=App.kpis, ac=App.ac_f, mj=App.monthsJp;
+    const k=App.kpis, ac=App.ac_web_f||App.ac_f, mj=App.monthsJp;
     const web=ac.filter(r=>r['Webアクセス'] && !isNil(r['リスク分類']));
+    const exDeptN=(App.aiExcludeDepts||[]).length;
     let html = `<div class="sec-title">🌐 Webアクセス：ガバナンス健全度分析</div>
       <p class="hint">目的：特定個人の監視ではなく、カテゴリ別アクセス傾向によるガバナンス状態の可視化</p>
       <div class="metric-row">${metric('Webアクセス総数',fmtInt(k.total_web))}${metric('高リスク件数',fmtInt(k.high_risk_count)+`（${k.total_web?round(k.high_risk_count/k.total_web*100,1):0}%）`)}${metric('中リスク件数',fmtInt(k.medium_risk_count)+`（${k.total_web?round(k.medium_risk_count/k.total_web*100,1):0}%）`)}${metric('ガバナンス健全度',k.governance_score+'点')}</div>
+      <div class="note-box"><b>🔎 中リスクの内訳（どちらが原因か）：</b> SNS ${fmtInt(k.sns_count||0)}件 ／ AI（生成AI）${fmtInt(k.ai_count||0)}件　→ <b style="color:#b45309">${(k.ai_count||0)>=(k.sns_count||0)?'生成AIが主因':'SNSが主因'}</b></div>
+      ${exDeptN?`<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ 部署除外を適用中：</b>「レポート設定」の野良AIチェックで選択されたユーザーが所属する部署（${esc((App.aiExcludeDepts||[]).join('・'))}）を、このタブの集計・グラフから除外して表示しています。</div>`:''}
       <div class="note-box"><b>リスク分類の定義：</b>
         🔴 <b>高リスク(3)</b> 転送・クラウドストレージ：情報漏洩・持ち出しリスク ／
         🟡 <b>中リスク(2)</b> SNS・AI外部：情報拡散・機密入力リスク ／
