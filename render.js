@@ -30,7 +30,7 @@
   }
   function metric(lbl,val){ return `<div class="metric"><div class="m-lbl">${lbl}</div><div class="m-val">${val}</div></div>`; }
   function chartBox(id){ return `<div class="chart-box"><div id="${id}"></div></div>`; }
-  function plot(id, fig){ if(!fig) return; const el=document.getElementById(id); if(el) Plotly.newPlot(el, fig.data, fig.layout, CH.CFG); }
+  function plot(id, fig){ if(!fig) return; const el=document.getElementById(id); if(!el) return; if(el._fullLayout) Plotly.react(el, fig.data, fig.layout, CH.CFG); else Plotly.newPlot(el, fig.data, fig.layout, CH.CFG); }
   function tableHtml(cols, rows){
     let h='<div class="table-scroll"><table class="dt"><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>';
     for(const r of rows){ h+='<tr>'+r.map(c=>`<td>${esc(c)}</td>`).join('')+'</tr>'; }
