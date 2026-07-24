@@ -209,12 +209,7 @@
     if(!App.outCompanies.length) App.outCompanies=App.allCompanies.slice();
 
     global.Render.renderAll();
-    // 注：#f-aiexclude は index.html 側の静的な要素で t1〜t7 の外にあり、
-    // renderAll()（#t1〜#t7 の再描画）では一切触れられない。よって
-    // buildAiExcludeUI() をここで再呼び出しする必要はない（チェックボックスの
-    // イベントリスナーは loadFromStore() 時に1回登録したまま維持される）。
-    // 以前ここで毎回 buildAiExcludeUI() を呼んでいたが、フィルタ変更のたびに
-    // 100件規模のチェックリストDOMを丸ごと作り直す無駄な処理だったため削除。
+    buildAiExcludeUI(); // renderAll後にイベントリスナーを再登録
   }
 
   // ── タブ切替 ──

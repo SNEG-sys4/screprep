@@ -1,18 +1,5 @@
 /* ============================================================
  * render.js ― 各タブの画面描画。グローバル App / Charts / DataCore を使用。
- *
- * 【DOM保持方針】
- * 各 renderTx() は「初回のみ」タブ内のHTML骨格（グラフ用div・テーブル用div・
- * 見出しなど、id付きの入れ物）を生成し、2回目以降は骨格を壊さず、
- * 中身（数値・テキスト・テーブル・Plotlyグラフ）だけを更新する。
- * これにより：
- *   ・Plotly のグラフdivが毎回作り直されず、plot() が Plotly.react() で
- *     差分更新できる（チラつき防止・状態保持）。
- *   ・タブ内のユーザー入力（フォーム等）が意図せずリセットされない。
- *   ・ボタンのイベントリスナーが多重登録されない（骨格生成時に1回だけ bind）。
- *   ・insertAdjacentHTML等でテーブルが際限なく積み上がる、といった事故を防ぐ。
- * 表示件数やカテゴリの有無で構造が変わる箇所（高リスク検出あり/なし等）は、
- * 両方の骨格をあらかじめ用意しておき、style.display で出し分ける。
  * ============================================================ */
 (function (global) {
   'use strict';
@@ -43,7 +30,6 @@
   }
   function metric(lbl,val){ return `<div class="metric"><div class="m-lbl">${lbl}</div><div class="m-val">${val}</div></div>`; }
   function chartBox(id){ return `<div class="chart-box"><div id="${id}"></div></div>`; }
-  // 既に描画済みの div（_fullLayout を持つ）なら react() で差分更新、初回のみ newPlot()
   function plot(id, fig){ if(!fig) return; const el=document.getElementById(id); if(!el) return; if(el._fullLayout) Plotly.react(el, fig.data, fig.layout, CH.CFG); else Plotly.newPlot(el, fig.data, fig.layout, CH.CFG); }
   function tableHtml(cols, rows){
     let h='<div class="table-scroll"><table class="dt"><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>';
@@ -53,8 +39,6 @@
   function fmtInt(n){ return (n||0).toLocaleString('ja-JP'); }
 
   // ══ TAB1 サマリー ══
-  // グラフ・持続的な入力は無く、全文が数値連動のテキストのため、
-  // 毎回まるごと再構築しても問題は生じない（意図的に骨格保持化していない）。
   function renderT1(){
     const k=App.kpis, mj=App.monthsJp;
     const period = mj.length ? `${mj[0]} ～ ${mj[mj.length-1]}` : '全期間';
@@ -109,63 +93,43 @@
   // ══ TAB2 リスク遮断・デバイス ══
   function renderT2(){
     const k=App.kpis, ac=App.ac_f, hw=App.hw_f, mj=App.monthsJp;
-    const t2el=document.getElementById('t2');
-    if(!t2el.dataset.init){
-      t2el.dataset.init='1';
-      t2el.innerHTML = `<div class="sec-title">🔒 セキュリティ統制：リスク遮断・デバイス・アプリ管理</div>
-        <p class="hint">目的：未許可デバイス・アプリの遮断による情報漏洩リスク・脆弱性対策の完遂率を評価</p>
-        <div id="t2-metrics" class="metric-row"></div>
-        <div class="grid2">${chartBox('c2-ev')}<div id="c2-blk-wrap">${chartBox('c2-blk')}</div></div>
-        <div class="sec-title">🔴 高リスクサービス 検出内訳</div>
-        <div id="t2-highrisk-yes">
-          <div class="grid2"><div class="chart-box"><div id="c2-domtable"></div></div>${chartBox('c2-dom')}</div>
-          ${chartBox('c2-hrtrend')}
-          <div class="warn-box" id="t2-warnbox"></div>
-        </div>
-        <div id="t2-highrisk-no" class="status-msg status-ok" style="display:none">✅ 高リスクカテゴリのアクセスは検出されていません。現在のポリシーが有効に機能しています。</div>
-        <div class="sec-title">🖥️ IT資産健全性</div>
-        <div id="t2-assets-metrics" class="metric-row"></div>
-        <div id="c2-year-wrap"></div>`;
-    }
-
     const devN=ac.filter(r=>r['デバイス操作']).length;
-    document.getElementById('t2-metrics').innerHTML =
-      metric('監視イベント総数',fmtInt(k.total_risk_events))+metric('遮断・検知件数',fmtInt(k.blocked_count))+
-      metric('遮断完遂率',k.interception_rate+'%')+metric('デバイス操作検知',fmtInt(devN));
-
-    plot('c2-ev', CH.figMonthEventStack(ac, mj));
-
-    const blk=CH.figCompanyBlock(ac);
-    const blkWrap=document.getElementById('c2-blk-wrap');
-    if(blk._empty){ blkWrap.innerHTML='<div class="status-msg status-info">防止・禁止イベントは検出されていません</div>'; }
-    else { if(!document.getElementById('c2-blk')) blkWrap.innerHTML=chartBox('c2-blk'); plot('c2-blk',blk); }
+    let html = `<div class="sec-title">🔒 セキュリティ統制：リスク遮断・デバイス・アプリ管理</div>
+      <p class="hint">目的：未許可デバイス・アプリの遮断による情報漏洩リスク・脆弱性対策の完遂率を評価</p>
+      <div class="metric-row">${metric('監視イベント総数',fmtInt(k.total_risk_events))}${metric('遮断・検知件数',fmtInt(k.blocked_count))}${metric('遮断完遂率',k.interception_rate+'%')}${metric('デバイス操作検知',fmtInt(devN))}</div>
+      <div class="grid2">${chartBox('c2-ev')}${chartBox('c2-blk')}</div>`;
 
     const webHigh = ac.filter(r=>r['Webアクセス'] && r['リスクレベル']===3);
-    const yesEl=document.getElementById('t2-highrisk-yes'), noEl=document.getElementById('t2-highrisk-no');
+    html += `<div class="sec-title">🔴 高リスクサービス 検出内訳</div>`;
     if(webHigh.length){
-      yesEl.style.display=''; noEl.style.display='none';
+      html += `<div class="grid2">${chartBox('c2-domtable')}${chartBox('c2-dom')}</div>${chartBox('c2-hrtrend')}`;
+      const cats=[...new Set(webHigh.map(r=>r['リスク分類']))];
+      html += `<div class="warn-box"><b>📌 管理者メモ：</b><br>
+        今期は <b>「${cats.join('」「')}」</b> カテゴリへのアクセスが検出されています。<br>
+        これらは社外へのファイル転送や、個人のクラウドストレージへのデータ保存に使われる可能性があるサービスです。<br><br>
+        <b>まず確認すべきこと：</b>業務上の必要性があってアクセスしているケースも多いため、いきなり制限をかけるのではなく、<b>部門ごとの利用傾向を把握</b>してから対応方針を決めることをお勧めします。必要に応じて「申請制」での利用許可の仕組みを整えることが、現実的な落としどころになります。</div>`;
+    } else {
+      html += `<div class="status-msg status-ok">✅ 高リスクカテゴリのアクセスは検出されていません。現在のポリシーが有効に機能しています。</div>`;
+    }
+
+    html += `<div class="sec-title">🖥️ IT資産健全性</div>
+      <div class="metric-row">${metric('登録デバイス数',k.total_devices)}${metric('減価償却切れ台数',k.expired_devices)}${metric('資産健全率',k.asset_health+'%')}${metric('',' ')}</div>
+      ${chartBox('c2-year')}`;
+    document.getElementById('t2').innerHTML = html;
+
+    plot('c2-ev', CH.figMonthEventStack(ac, mj));
+    const blk=CH.figCompanyBlock(ac); if(blk._empty){ document.getElementById('c2-blk').outerHTML='<div class="status-msg status-info">防止・禁止イベントは検出されていません</div>'; } else plot('c2-blk',blk);
+    if(webHigh.length){
       plot('c2-dom', CH.figHighRiskDomains(webHigh));
       plot('c2-hrtrend', CH.figHighRiskTrend(webHigh, mj));
+      // カテゴリ集計テーブル
       const m=g(webHigh,r=>r['リスク分類']); const rows=[];
       m.forEach((v,cat)=>rows.push([cat,(DC.SITE_GOVERNANCE[cat].domains.slice(0,3).join(' / ')||'不明'),v.length,
         new Set(v.map(r=>r.login_id)).size, new Set(v.map(r=>r['台帳_会社名'])).size, DC.SITE_GOVERNANCE[cat].reason]));
       rows.sort((a,b)=>b[2]-a[2]);
       document.getElementById('c2-domtable').innerHTML = tableHtml(['カテゴリ','該当サービス例','件数','関係ユーザー','会社数','リスク内容'],rows);
-      const cats=[...new Set(webHigh.map(r=>r['リスク分類']))];
-      document.getElementById('t2-warnbox').innerHTML = `<b>📌 管理者メモ：</b><br>
-        今期は <b>「${cats.join('」「')}」</b> カテゴリへのアクセスが検出されています。<br>
-        これらは社外へのファイル転送や、個人のクラウドストレージへのデータ保存に使われる可能性があるサービスです。<br><br>
-        <b>まず確認すべきこと：</b>業務上の必要性があってアクセスしているケースも多いため、いきなり制限をかけるのではなく、<b>部門ごとの利用傾向を把握</b>してから対応方針を決めることをお勧めします。必要に応じて「申請制」での利用許可の仕組みを整えることが、現実的な落としどころになります。`;
-    } else {
-      yesEl.style.display='none'; noEl.style.display='';
     }
-
-    document.getElementById('t2-assets-metrics').innerHTML =
-      metric('登録デバイス数',k.total_devices)+metric('減価償却切れ台数',k.expired_devices)+metric('資産健全率',k.asset_health+'%')+metric('',' ');
-    const yr=CH.figPurchaseYear(hw);
-    const yearWrap=document.getElementById('c2-year-wrap');
-    if(yr){ if(!document.getElementById('c2-year')) yearWrap.innerHTML=chartBox('c2-year'); plot('c2-year',yr); }
-    else { yearWrap.innerHTML=''; }
+    const yr=CH.figPurchaseYear(hw); if(yr) plot('c2-year',yr); else document.getElementById('c2-year').outerHTML='';
   }
 
   // ══ TAB3 Webガバナンス ══
@@ -222,39 +186,25 @@
   // ══ TAB4 PC稼働 ══
   function renderT4(){
     const k=App.kpis, pc=App.pc_f, mj=App.monthsJp;
-    const t4el=document.getElementById('t4');
-    if(!t4el.dataset.init){
-      t4el.dataset.init='1';
-      t4el.innerHTML = `<div class="sec-title">⚡ PC稼働状況：組織健全性・業務偏重・深夜稼働リスク</div>
-        <p class="hint">目的：個人の残業摘発ではなく、組織の業務偏重と深夜稼働によるセキュリティリスクを分析</p>
-        <div id="t4-metrics" class="metric-row"></div>
-        <div class="grid2">${chartBox('c4-dept')}${chartBox('c4-ln')}</div>
-        <div class="sec-title">稼働時間帯分布（リスク時間帯の可視化）</div><div id="c4-heatwrap"></div>
-        <div class="sec-title">部署別 稼働状況ランキング（四半期集計）</div><div id="c4-depttable"></div>
-        <div class="sec-title">🔌 PC稼働時間ランキング ＆ 電源付きっぱなし検出</div>
-        <div class="warn-box"><b>⚠️ なぜ「電源付きっぱなし」がセキュリティリスクなのか</b><br>
-          <b>① 不正アクセスの踏み台：</b>誰もいないPCがネットワーク接続されたままだと、外部からの侵入口になりえます。<br>
-          <b>② マルウェア感染の拡大：</b>感染端末が長時間稼働していると、社内ネットワーク全体への被害拡大リスクが高まります。<br>
-          <b>③ 内部不正・のぞき見：</b>ロックされていない放置PCは、物理的な情報漏洩の機会を与えます。<br>
-          <b>④ 対応の遅延：</b>担当者不在の長時間稼働端末は検知・対応が遅れる原因になります。</div>
-        <label class="chk">長時間稼働とみなす閾値（時間）：<input type="number" id="long-th" min="6" max="24" value="${App.longThreshold}" style="width:70px"></label>
-        <div id="c4-rankwrap"></div>`;
-      document.getElementById('long-th').addEventListener('change', e=>{
-        App.longThreshold=Math.min(24,Math.max(6,parseInt(e.target.value)||12)); renderRanking();
-      });
-    }
-
-    document.getElementById('t4-metrics').innerHTML =
-      metric('対象稼働記録',fmtInt(pc.length)+'件')+metric('業務偏重指数',k.workload_concentration+'倍')+
-      metric('深夜稼働件数',fmtInt(k.latenight_days)+'件')+metric('休日稼働件数',fmtInt(k.holiday_active)+'件');
+    let html = `<div class="sec-title">⚡ PC稼働状況：組織健全性・業務偏重・深夜稼働リスク</div>
+      <p class="hint">目的：個人の残業摘発ではなく、組織の業務偏重と深夜稼働によるセキュリティリスクを分析</p>
+      <div class="metric-row">${metric('対象稼働記録',fmtInt(pc.length)+'件')}${metric('業務偏重指数',k.workload_concentration+'倍')}${metric('深夜稼働件数',fmtInt(k.latenight_days)+'件')}${metric('休日稼働件数',fmtInt(k.holiday_active)+'件')}</div>
+      <div class="grid2">${chartBox('c4-dept')}${chartBox('c4-ln')}</div>
+      <div class="sec-title">稼働時間帯分布（リスク時間帯の可視化）</div><div id="c4-heatwrap">${chartBox('c4-heat')}</div>
+      <div class="sec-title">部署別 稼働状況ランキング（四半期集計）</div><div id="c4-depttable"></div>
+      <div class="sec-title">🔌 PC稼働時間ランキング ＆ 電源付きっぱなし検出</div>
+      <div class="warn-box"><b>⚠️ なぜ「電源付きっぱなし」がセキュリティリスクなのか</b><br>
+        <b>① 不正アクセスの踏み台：</b>誰もいないPCがネットワーク接続されたままだと、外部からの侵入口になりえます。<br>
+        <b>② マルウェア感染の拡大：</b>感染端末が長時間稼働していると、社内ネットワーク全体への被害拡大リスクが高まります。<br>
+        <b>③ 内部不正・のぞき見：</b>ロックされていない放置PCは、物理的な情報漏洩の機会を与えます。<br>
+        <b>④ 対応の遅延：</b>担当者不在の長時間稼働端末は検知・対応が遅れる原因になります。</div>
+      <label class="chk">長時間稼働とみなす閾値（時間）：<input type="number" id="long-th" min="6" max="24" value="${App.longThreshold}" style="width:70px"></label>
+      <div id="c4-rankwrap"></div>`;
+    document.getElementById('t4').innerHTML=html;
 
     plot('c4-dept', CH.figDeptAvgHours(pc));
-    plot('c4-ln', CH.figMonthlyLatenight(pc, mj, App.cfg.LATE_NIGHT_START));
-    const heat=CH.figHourHeatmap(pc, App.cfg.LATE_NIGHT_START);
-    const heatWrap=document.getElementById('c4-heatwrap');
-    if(heat){ if(!document.getElementById('c4-heat')) heatWrap.innerHTML=chartBox('c4-heat'); plot('c4-heat',heat); }
-    else { heatWrap.innerHTML=''; }
-
+    const ln=CH.figMonthlyLatenight(pc, mj, App.cfg.LATE_NIGHT_START); plot('c4-ln', ln);
+    const heat=CH.figHourHeatmap(pc, App.cfg.LATE_NIGHT_START); if(heat) plot('c4-heat',heat); else document.getElementById('c4-heatwrap').innerHTML='';
     // 部署別集計テーブル
     const m=g(pc.filter(r=>!isNil(r['台帳_会社名'])&&!isNil(r['台帳_部署名'])), r=>r['台帳_会社名']+'|'+r['台帳_部署名']);
     const rows=[]; m.forEach((v,key)=>{ const [co,de]=key.split('|');
@@ -264,56 +214,36 @@
     document.getElementById('c4-depttable').innerHTML = tableHtml(['会社名','部署名','平均稼働時間','深夜稼働','休日稼働','時間外稼働','稼働日数'],rows);
 
     renderRanking();
+    document.getElementById('long-th').addEventListener('change', e=>{
+      App.longThreshold=Math.min(24,Math.max(6,parseInt(e.target.value)||12)); renderRanking();
+    });
   }
-
   function renderRanking(){
     const pc=App.pc_f, th=App.longThreshold;
     const rank=CH.terminalRanking(pc, th);
-    const wrap=document.getElementById('c4-rankwrap');
-    if(!wrap.dataset.init){
-      wrap.dataset.init='1';
-      wrap.innerHTML = `<div class="sec-title" style="border-left-color:#7C3AED">📊 端末別 平均稼働時間ランキング（上位30件）</div>
-        ${chartBox('c4-rank')}
-        <div id="c4-ranktable"></div>
-        <div class="sec-title" style="border-left-color:#DC2626" id="c4-long-title">🚨 電源付きっぱなし疑い一覧</div>
-        <div id="c4-long-yes">
-          <div id="c4-long-metrics" class="metric-row"></div>
-          ${chartBox('c4-longm')}
-          <div id="c4-longtable"></div>
-          <button class="btn btn-ghost" id="btn-csv">📥 電源付きっぱなし疑いリスト を CSV でダウンロード</button>
-        </div>
-        <div id="c4-long-no" class="status-msg status-ok" style="display:none"></div>`;
-      // クリック時点の最新データ（App._longCsvPayload）を参照するため、リスナーは骨格生成時に1回だけ登録
-      document.getElementById('btn-csv').addEventListener('click', ()=>{
-        const p=App._longCsvPayload; if(p) App._exportLongCsv(p.disp, p.cols, p.th);
-      });
-    }
-
-    plot('c4-rank', CH.figTerminalRanking(rank, th));
-    const top=rank.slice(0,30);
-    document.getElementById('c4-ranktable').innerHTML = tableHtml(
-      ['端末名','氏名','部署','会社','平均h','最大h','長時間日数','稼働日数','長時間率%','深夜','判定'],
-      top.map(r=>[r.term,r.name||'',r.dept||'',r.comp||'',r.avg,r.max,r.longDays,r.days,r.longRate,r.night,r.flag]));
-
-    document.getElementById('c4-long-title').textContent = `🚨 電源付きっぱなし疑い一覧（${th}時間超）`;
+    let html = `<div class="sec-title" style="border-left-color:#7C3AED">📊 端末別 平均稼働時間ランキング（上位30件）</div>${chartBox('c4-rank')}`;
     const longRows = pc.filter(r=>(r['ログ時間_分']||0)>th*60);
-    const yesEl=document.getElementById('c4-long-yes'), noEl=document.getElementById('c4-long-no');
-    if(longRows.length===0){
-      yesEl.style.display='none';
-      noEl.style.display=''; noEl.textContent = `✅ ${th}時間を超える稼働記録は検出されませんでした。`;
-      App._longCsvPayload=null;
-    } else {
-      yesEl.style.display=''; noEl.style.display='none';
+    html += `<div class="sec-title" style="border-left-color:#DC2626">🚨 電源付きっぱなし疑い一覧（${th}時間超）</div>`;
+    if(longRows.length===0){ html+=`<div class="status-msg status-ok">✅ ${th}時間を超える稼働記録は検出されませんでした。</div>`; }
+    else {
       const maxH=Math.max.apply(null,longRows.map(r=>(r['ログ時間_分']||0)/60));
-      document.getElementById('c4-long-metrics').innerHTML =
-        metric('検出件数',fmtInt(longRows.length)+'件')+metric('対象端末数',new Set(longRows.map(r=>r['端末エージェント名'])).size+'台')+
-        metric('最長稼働',round(maxH,1)+'h')+metric('平均長時間稼働',round(mean(longRows.map(r=>(r['ログ時間_分']||0)/60)),1)+'h');
+      html += `<div class="metric-row">${metric('検出件数',fmtInt(longRows.length)+'件')}${metric('対象端末数',new Set(longRows.map(r=>r['端末エージェント名'])).size+'台')}${metric('最長稼働',round(maxH,1)+'h')}${metric('平均長時間稼働',round(mean(longRows.map(r=>(r['ログ時間_分']||0)/60)),1)+'h')}</div>${chartBox('c4-longm')}<div id="c4-longtable"></div>
+        <button class="btn btn-ghost" id="btn-csv">📥 電源付きっぱなし疑いリスト を CSV でダウンロード</button>`;
+    }
+    document.getElementById('c4-rankwrap').innerHTML=html;
+    plot('c4-rank', CH.figTerminalRanking(rank, th));
+    // ランキングテーブル
+    const top=rank.slice(0,30);
+    document.getElementById('c4-rank').insertAdjacentHTML('afterend',
+      tableHtml(['端末名','氏名','部署','会社','平均h','最大h','長時間日数','稼働日数','長時間率%','深夜','判定'],
+        top.map(r=>[r.term,r.name||'',r.dept||'',r.comp||'',r.avg,r.max,r.longDays,r.days,r.longRate,r.night,r.flag])));
+    if(longRows.length){
       plot('c4-longm', CH.figLongMonthly(pc, App.monthsJp, th));
       const cols=['日付','端末エージェント名','台帳_氏名','台帳_部署名','初回ログ時刻','最終ログ時刻','稼働時間_h','深夜稼働','休日'];
       const disp = longRows.slice().sort((a,b)=>(b['ログ時間_分']||0)-(a['ログ時間_分']||0));
       document.getElementById('c4-longtable').innerHTML = tableHtml(cols,
         disp.map(r=>cols.map(c=> c==='稼働時間_h'?round((r['ログ時間_分']||0)/60,2): c==='深夜稼働'||c==='休日'?(r[c]?'✓':''): (r[c]==null?'':r[c]))));
-      App._longCsvPayload = {disp, cols, th};
+      document.getElementById('btn-csv').addEventListener('click', ()=>App._exportLongCsv(disp,cols,th));
     }
   }
 

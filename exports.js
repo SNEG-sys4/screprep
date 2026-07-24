@@ -58,30 +58,38 @@
     {id:'risk', icon:'🔮', name:'8. リスク予測・想定インパクト', opts:[['risk','金額換算＋脅威シナリオ',true]], cmt:'risk'},
   ];
 
+  // 骨格（チェックボックス・コメント欄など、ユーザー入力を保持したいUI）は初回のみ生成。
+  // 対象月・対象会社などデータ依存の部分だけ #t5-scope を毎回更新する。
+  // こうしないと、他タブのフィルタ変更のたびにチェック状態・入力中コメントが消えてしまう。
   global.renderT5 = function(){
-    const period = App.monthsJp.length?`${App.monthsJp[0]}〜${App.monthsJp[App.monthsJp.length-1]}`:'全期間';
-    let html=`<div class="sec-title">📄 経営幹部向け ITガバナンスレポート出力</div>
-      <div class="note-box">含めたいセクション・グラフ・表をチェックして各ボタンを押してください。コメント欄に入力するとレポートに埋め込まれます（空欄=手書き用スペース）。</div>
-      <div class="status-msg status-info">📋 出力対象：${period} ／ 対象会社：${App.outCompanies.join(' / ')}</div>
-      <div class="sec-title">📋 出力するセクションを選択</div><div class="rep-cols"><div>`;
-    SECS.forEach((s,i)=>{
-      if(i===3) html+='</div><div>'; // 右カラムへ
-      html+=`<details class="rep-sec" open><summary>${s.icon} ${s.name}</summary>`;
-      s.opts.forEach(([key,lbl,def])=>{ html+=`<label class="chk"><input type="checkbox" data-sec="${key}" ${def?'checked':''}> ${lbl}</label>`; });
-      html+=`<label class="chk"><input type="checkbox" data-sec="${s.cmt}_comment" checked> コメント欄を追加</label>
-        <textarea data-cmt="${s.id}" placeholder="コメント（空欄=手書きスペース）"></textarea></details>`;
-    });
-    html+=`</div></div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-word">📄 Wordレポートを生成</button>
-        <button class="btn btn-ghost" id="btn-html">🌐 HTMLレポートを生成</button>
-        <button class="btn btn-ghost" id="btn-excel">📊 Excelレポートを生成</button>
-      </div><div id="rep-status"></div>`;
-    document.getElementById('t5').innerHTML=html;
+    const t5el=document.getElementById('t5');
+    if(!t5el.dataset.init){
+      t5el.dataset.init='1';
+      let html=`<div class="sec-title">📄 経営幹部向け ITガバナンスレポート出力</div>
+        <div class="note-box">含めたいセクション・グラフ・表をチェックして各ボタンを押してください。コメント欄に入力するとレポートに埋め込まれます（空欄=手書き用スペース）。</div>
+        <div class="status-msg status-info" id="t5-scope"></div>
+        <div class="sec-title">📋 出力するセクションを選択</div><div class="rep-cols"><div>`;
+      SECS.forEach((s,i)=>{
+        if(i===3) html+='</div><div>'; // 右カラムへ
+        html+=`<details class="rep-sec" open><summary>${s.icon} ${s.name}</summary>`;
+        s.opts.forEach(([key,lbl,def])=>{ html+=`<label class="chk"><input type="checkbox" data-sec="${key}" ${def?'checked':''}> ${lbl}</label>`; });
+        html+=`<label class="chk"><input type="checkbox" data-sec="${s.cmt}_comment" checked> コメント欄を追加</label>
+          <textarea data-cmt="${s.id}" placeholder="コメント（空欄=手書きスペース）"></textarea></details>`;
+      });
+      html+=`</div></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btn-word">📄 Wordレポートを生成</button>
+          <button class="btn btn-ghost" id="btn-html">🌐 HTMLレポートを生成</button>
+          <button class="btn btn-ghost" id="btn-excel">📊 Excelレポートを生成</button>
+        </div><div id="rep-status"></div>`;
+      t5el.innerHTML=html;
 
-    document.getElementById('btn-word').addEventListener('click', ()=>runExport('word'));
-    document.getElementById('btn-html').addEventListener('click', ()=>runExport('html'));
-    document.getElementById('btn-excel').addEventListener('click', ()=>runExport('excel'));
+      document.getElementById('btn-word').addEventListener('click', ()=>runExport('word'));
+      document.getElementById('btn-html').addEventListener('click', ()=>runExport('html'));
+      document.getElementById('btn-excel').addEventListener('click', ()=>runExport('excel'));
+    }
+    const period = App.monthsJp.length?`${App.monthsJp[0]}〜${App.monthsJp[App.monthsJp.length-1]}`:'全期間';
+    document.getElementById('t5-scope').textContent = `📋 出力対象：${period} ／ 対象会社：${App.outCompanies.join(' / ')}`;
   };
 
   function collectSelections(){

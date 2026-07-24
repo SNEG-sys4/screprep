@@ -1,5 +1,9 @@
 /* ============================================================
  * trends.js ― TAB6 リスク予測・インパクト分析
+ * DOM保持方針は render.js と同様（初回のみ骨格生成、以降は中身のみ更新）。
+ * ここは特にユーザーが数値を打ち込む入力欄（想定漏えい人数 等）を持つため、
+ * 骨格を毎回作り直すと「他のフィルタを変えただけで入力が消える」事故になる。
+ * 骨格は初回のみ生成し、以降は再生成しない。
  * ============================================================ */
 (function (global) {
   'use strict';
@@ -7,37 +11,49 @@
   const round=DC.round, fmtInt=n=>(n||0).toLocaleString('ja-JP');
 
   global.renderT6 = function(){
-    const mk=App.monthlyKpis, n=mk.length, mj=App.monthsJp;
-    let html=`<div class="sec-title">🔮 リスク予測・インパクト分析</div>
-      <p class="hint">過去データの傾向から将来を予測し、放置した場合の経営インパクトと脅威シナリオを可視化します。</p>
-      <div class="sec-title">📈 トレンド予測・アラート</div>`;
+    const mk=App.monthlyKpis, n=mk.length;
+    const t6el=document.getElementById('t6');
+    if(!t6el.dataset.init){
+      t6el.dataset.init='1';
+      t6el.innerHTML = `<div class="sec-title">🔮 リスク予測・インパクト分析</div>
+        <p class="hint">過去データの傾向から将来を予測し、放置した場合の経営インパクトと脅威シナリオを可視化します。</p>
+        <div class="sec-title">📈 トレンド予測・アラート</div>
+        <div id="t6-trend-wrap"></div>
+        <div class="sec-title">💰 リスクの金額換算（インパクト・シミュレーション）</div>
+        <p class="hint">検出リスクを放置した場合の想定コストを公開調査データ（JNSA等）をもとに概算。実際の金額は業種・規模等で大きく異なります。</p>
+        <div class="filters">
+          <div class="filter-item"><label>🔴 想定漏えい人数（人）</label><input type="number" id="i-persons" value="100" step="10"></div>
+          <div class="filter-item"><label>1人あたり想定損害賠償額（円）</label><input type="number" id="i-percost" value="28308" step="1000"></div>
+          <div class="filter-item"><label>初動対応・調査費用（万円）</label><input type="number" id="i-response" value="300" step="50"></div>
+          <div class="filter-item"><label>高リスク1件あたり発生確率(%)※仮定値</label><input type="number" id="i-prob" value="0.5" step="0.1"></div>
+          <div class="filter-item"><label>🔌 電気料金単価（円/kWh）</label><input type="number" id="i-elec" value="31" step="1"></div>
+          <div class="filter-item"><label>PC1台平均消費電力（kW）</label><input type="number" id="i-kw" value="0.1" step="0.01"></div>
+          <div class="filter-item"><label>🖥️ 償却切れ1台あたり追加コスト（万円/年）</label><input type="number" id="i-aging" value="3" step="1"></div>
+        </div>
+        <div class="metric-row" id="impact-metrics" style="margin-top:14px"></div>
+        <div class="chart-box"><div id="impact-chart"></div></div>
+        <div class="note-box"><b>📌 この数字の見方：</b>対策コストと放置コストを比較する参考値です。<br>
+          <b>📚 主な出典：</b>JNSA「情報セキュリティインシデントに関する調査報告書」（2016〜2018）、「インシデント損害額調査レポート2021年版」。<br>
+          <b>⚠️ 注意：</b>公開データに基づく概算であり、正式なリスク評価の代替にはなりません。</div>
+        <div class="sec-title">🧨 今後起こりうるセキュリティインシデント シナリオ</div>
+        <div id="scenarios"></div>`;
+      bindImpact();
+    }
 
-    if(n<2){ html+=`<div class="status-msg status-info">📌 トレンド予測には2ヶ月以上のデータが必要です。対象期間を増やしてください。</div>`; }
-    else { html+=`<div class="grid2" id="trend-charts"></div><div id="trend-alerts"></div>
-      <p class="hint">※ 予測は過去データの線形トレンドに基づく簡易推計です。傾向把握・早期対応の参考値としてご活用ください。</p>`; }
+    const trendWrap=document.getElementById('t6-trend-wrap');
+    if(n<2){
+      trendWrap.innerHTML = `<div class="status-msg status-info">📌 トレンド予測には2ヶ月以上のデータが必要です。対象期間を増やしてください。</div>`;
+    } else {
+      // 骨格（グラフ枠・アラート枠）は月数が2以上になった最初のタイミングで1回だけ生成
+      if(!trendWrap.dataset.init){
+        trendWrap.dataset.init='1';
+        trendWrap.innerHTML = `<div class="grid2" id="trend-charts"></div><div id="trend-alerts"></div>
+          <p class="hint">※ 予測は過去データの線形トレンドに基づく簡易推計です。傾向把握・早期対応の参考値としてご活用ください。</p>`;
+      }
+      renderTrends();
+    }
 
-    html+=`<div class="sec-title">💰 リスクの金額換算（インパクト・シミュレーション）</div>
-      <p class="hint">検出リスクを放置した場合の想定コストを公開調査データ（JNSA等）をもとに概算。実際の金額は業種・規模等で大きく異なります。</p>
-      <div class="filters">
-        <div class="filter-item"><label>🔴 想定漏えい人数（人）</label><input type="number" id="i-persons" value="100" step="10"></div>
-        <div class="filter-item"><label>1人あたり想定損害賠償額（円）</label><input type="number" id="i-percost" value="28308" step="1000"></div>
-        <div class="filter-item"><label>初動対応・調査費用（万円）</label><input type="number" id="i-response" value="300" step="50"></div>
-        <div class="filter-item"><label>高リスク1件あたり発生確率(%)※仮定値</label><input type="number" id="i-prob" value="0.5" step="0.1"></div>
-        <div class="filter-item"><label>🔌 電気料金単価（円/kWh）</label><input type="number" id="i-elec" value="31" step="1"></div>
-        <div class="filter-item"><label>PC1台平均消費電力（kW）</label><input type="number" id="i-kw" value="0.1" step="0.01"></div>
-        <div class="filter-item"><label>🖥️ 償却切れ1台あたり追加コスト（万円/年）</label><input type="number" id="i-aging" value="3" step="1"></div>
-      </div>
-      <div class="metric-row" id="impact-metrics" style="margin-top:14px"></div>
-      <div class="chart-box"><div id="impact-chart"></div></div>
-      <div class="note-box"><b>📌 この数字の見方：</b>対策コストと放置コストを比較する参考値です。<br>
-        <b>📚 主な出典：</b>JNSA「情報セキュリティインシデントに関する調査報告書」（2016〜2018）、「インシデント損害額調査レポート2021年版」。<br>
-        <b>⚠️ 注意：</b>公開データに基づく概算であり、正式なリスク評価の代替にはなりません。</div>
-      <div class="sec-title">🧨 今後起こりうるセキュリティインシデント シナリオ</div>
-      <div id="scenarios"></div>`;
-    document.getElementById('t6').innerHTML=html;
-
-    if(n>=2) renderTrends();
-    bindImpact(); recomputeImpact();
+    recomputeImpact();
   };
 
   function renderTrends(){
@@ -48,15 +64,19 @@
       {key:'workload_concentration',label:'業務偏重指数',unit:'倍',metric:'workload_concentration',hb:false},
       {key:'latenight_rate',label:'深夜稼働率',unit:'%',metric:'latenight_rate',hb:false},
     ];
-    const wrap=document.getElementById('trend-charts'); wrap.innerHTML='';
+    const wrap=document.getElementById('trend-charts');
+    // グラフ用divは初回のみ作成（以降は同じdivにreact()で差分更新）
+    if(!wrap.dataset.init){
+      wrap.dataset.init='1';
+      wrap.innerHTML = METRICS.map((tm,idx)=>`<div class="chart-box"><div id="trend-${idx}"></div></div>`).join('');
+    }
     const x=mk.map((_,i)=>i); const sev={green:0,yellow:1,red:2}; const alerts=[];
     METRICS.forEach((tm,idx)=>{
       const y=mk.map(m=>+m[tm.key]);
       const {slope,intercept}=CH.linfit(x,y); const pred=slope*mk.length+intercept;
       const curS=DC.getStatus(y[y.length-1],tm.metric,tm.hb), predS=DC.getStatus(pred,tm.metric,tm.hb);
       if(sev[predS]>sev[curS]) alerts.push({label:tm.label,cur:y[y.length-1],pred:round(pred,2),unit:tm.unit,curS,predS});
-      const id='trend-'+idx; const box=document.createElement('div'); box.className='chart-box'; box.innerHTML='<div id="'+id+'"></div>'; wrap.appendChild(box);
-      RD.plot(id, CH.figTrend(mj, y, tm.metric, tm.unit, pred, predS));
+      RD.plot('trend-'+idx, CH.figTrend(mj, y, tm.metric, tm.unit, pred, predS));
     });
     const al=document.getElementById('trend-alerts');
     if(alerts.length){ al.innerHTML=alerts.map(a=>{ const[ip,,cp,bp]=RD.badge(a.predS), [ic]=RD.badge(a.curS);
