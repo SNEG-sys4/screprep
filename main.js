@@ -199,6 +199,20 @@
     const exDepts=new Set(App.aiExcludeDepts||[]);
     App.ac_web_f = exDepts.size ? App.ac_f.filter(r=>!exDepts.has(r['台帳_部署名'])) : App.ac_f;
     Object.assign(App.kpis, DC.computeWebGovernance(App.ac_web_f));
+
+    // 除外ユーザーのlogin_idセットを構築
+    const exUserSet = new Set(
+      (App.aiExcludeUsers || []).map(x => String(x).trim().toLowerCase()).filter(Boolean)
+    );
+    // PC稼働からも除外ユーザーを除く（深夜・休日・長時間稼働の集計対象から外す）
+    App.pc_f_ex = exUserSet.size
+      ? App.pc_f.filter(r => {
+          const lid = r['台帳_login_id'] != null
+            ? String(r['台帳_login_id']).trim().toLowerCase()
+            : null;
+          return !lid || !exUserSet.has(lid);
+        })
+      : App.pc_f;
     App.monthlyKpis=[];
     for(const m of App.months){ const pcm=App.pc_f.filter(r=>r['月']===m), acm=App.ac_f.filter(r=>r['月']===m);
       if(pcm.length===0 && acm.length===0) continue;

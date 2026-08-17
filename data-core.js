@@ -252,11 +252,12 @@
     }
     for (const r of pc) {
       const h = byMachine[r['端末エージェント名']];
-      r['台帳_氏名']   = h ? h.user_name : null;
-      r['台帳_会社名'] = h ? h['会社名'] : null;
-      r['台帳_部署名'] = h ? h['部署名'] : null;
-      r['台帳_課名']   = h ? h['課名'] : null;
-      r['台帳_組織']   = h ? h['組織'] : null;
+      r['台帳_氏名']     = h ? h.user_name : null;
+      r['台帳_login_id'] = h ? h.login_id : null;
+      r['台帳_会社名']   = h ? h['会社名'] : null;
+      r['台帳_部署名']   = h ? h['部署名'] : null;
+      r['台帳_課名']     = h ? h['課名'] : null;
+      r['台帳_組織']     = h ? h['組織'] : null;
     }
     return { hw, pc, ac };
   }

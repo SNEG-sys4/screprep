@@ -103,6 +103,67 @@
       lnS!=='green' ? '深夜稼働が多い部署・端末を確認し、業務上の必要性があるかどうかを簡単にヒアリングします。必要なものは適切に管理し、そうでないものはポリシーで対応します。いきなり制限するより、まず実態把握が先です。'
         : '深夜稼働が発生した際には自動通知が届く設定を維持し、異常の早期把握ができる体制を続けます。', ln,'%');
 
+    // ── TASK 5: 前四半期比較パネル ──
+    const mk = App.monthlyKpis;
+    if (mk && mk.length >= 2) {
+      const recent = mk.slice(-3);
+      const prev   = mk.slice(-6, -3);
+
+      const qMetrics = [
+        { key: 'governance_score',       label: 'Webガバナンス健全度', unit: '点', hb: true },
+        { key: 'interception_rate',      label: 'リスク遮断完遂率',   unit: '%',  hb: true },
+        { key: 'workload_concentration', label: '業務偏重指数',       unit: '倍', hb: false },
+        { key: 'latenight_rate',         label: '深夜稼働率',         unit: '%',  hb: false },
+      ];
+
+      function qAvg(arr, key) {
+        const vals = arr.map(r => r[key]).filter(v => v !== null && v !== undefined && !isNaN(v));
+        if (!vals.length) return null;
+        return vals.reduce((s, v) => s + Number(v), 0) / vals.length;
+      }
+
+      const recentLabel = recent.length ? recent.map(r => r['月_表示'] || r['月']).join('・') : '直近3か月';
+      const prevLabel   = prev.length   ? prev.map(r => r['月_表示'] || r['月']).join('・')   : '前期3か月';
+
+      let qHtml = `<div class="sec-title">📈 前四半期比較</div>`;
+      if (prev.length === 0) {
+        qHtml += `<div class="note-box" style="color:#64748b">※ 前四半期の月次データが不足しているため比較できません（現在 ${mk.length} か月分）。6か月以上のデータがあると比較が表示されます。</div>`;
+      } else {
+        qHtml += `<div style="font-size:.82rem;color:#64748b;margin-bottom:8px">直近：${recentLabel}　／　前期：${prevLabel}</div>`;
+        qHtml += `<div class="grid4">`;
+        for (const m of qMetrics) {
+          const rVal = qAvg(recent, m.key);
+          const pVal = qAvg(prev,   m.key);
+          let arrow = '⚪', arrowColor = '#64748b', arrowLabel = '変化なし', diff = null;
+          if (rVal !== null && pVal !== null) {
+            diff = rVal - pVal;
+            const improved = m.hb ? diff > 0 : diff < 0;
+            const worsened = m.hb ? diff < 0 : diff > 0;
+            if (Math.abs(diff) < 0.05) {
+              arrow = '⚪'; arrowColor = '#64748b'; arrowLabel = '変化なし';
+            } else if (improved) {
+              arrow = '🟢↑'; arrowColor = '#059669'; arrowLabel = '改善';
+            } else if (worsened) {
+              arrow = '🔴↓'; arrowColor = '#DC2626'; arrowLabel = '悪化';
+            }
+          }
+          const rDisp = rVal !== null ? round(rVal, 1) + m.unit : '—';
+          const pDisp = pVal !== null ? round(pVal, 1) + m.unit : '—';
+          const diffDisp = diff !== null ? (diff >= 0 ? '+' : '') + round(diff, 1) + m.unit : '';
+          qHtml += `<div class="score-card" style="background:#F8FAFC;border-color:${arrowColor}">
+            <div class="lbl">${m.label}</div>
+            <div class="val" style="color:${arrowColor};font-size:1.5rem">${arrow}</div>
+            <div style="font-size:.88rem;color:#334155">直近：<b>${rDisp}</b></div>
+            <div style="font-size:.82rem;color:#64748b">前期：${pDisp}</div>
+            ${diffDisp ? `<div style="font-size:.82rem;color:${arrowColor};font-weight:600">差分：${diffDisp}</div>` : ''}
+            <div class="bd" style="color:${arrowColor}">${arrowLabel}</div>
+          </div>`;
+        }
+        qHtml += `</div>`;
+      }
+      html += qHtml;
+    }
+
     document.getElementById('t1').innerHTML = html;
   }
 
@@ -182,6 +243,7 @@
         <div id="t3-metrics" class="metric-row"></div>
         <div id="t3-midnote" class="note-box"></div>
         <div id="t3-exnote"></div>
+        <div id="t3-score-breakdown"></div>
         <div class="note-box"><b>リスク分類の定義：</b>
           🔴 <b>高リスク(3)</b> 転送・クラウドストレージ：情報漏洩・持ち出しリスク ／
           🟡 <b>中リスク(2)</b> SNS・AI外部：情報拡散・機密入力リスク ／
@@ -198,6 +260,23 @@
       metric('ガバナンス健全度',k.governance_score+'点');
     document.getElementById('t3-midnote').innerHTML =
       `<b>🔎 中リスクの内訳（どちらが原因か）：</b> SNS ${fmtInt(k.sns_count||0)}件 ／ AI（生成AI）${fmtInt(k.ai_count||0)}件　→ <b style="color:#b45309">${(k.ai_count||0)>=(k.sns_count||0)?'生成AIが主因':'SNSが主因'}</b>`;
+    // スコア内訳（TASK 4）
+    const web2 = (App.ac_web_f||App.ac_f).filter(r=>r['Webアクセス']);
+    const tw2=web2.length, highN2=web2.filter(r=>r['リスクレベル']===3).length,
+          midN2=web2.filter(r=>r['リスクレベル']===2).length, lowN2=web2.filter(r=>r['リスクレベル']===1).length;
+    const rw2=highN2*3+midN2*2+lowN2*1, mp2=tw2*3;
+    const density2=mp2>0?rw2/mp2:0;
+    const sbEl=document.getElementById('t3-score-breakdown');
+    if(sbEl) sbEl.innerHTML = tw2>0 ? `<div class="note-box" style="border-left:4px solid #2563EB;background:#EFF6FF;margin-bottom:8px">
+      <b>📊 スコア算出根拠</b><br>
+      全Webアクセス <b>${fmtInt(tw2)}</b> 件 のうち、
+      🔴 高リスク(×3点) <b>${fmtInt(highN2)}</b> 件 ＋
+      🟡 中リスク(×2点) <b>${fmtInt(midN2)}</b> 件 ＋
+      🔵 低リスク(×1点) <b>${fmtInt(lowN2)}</b> 件<br>
+      リスク加重合計 ${fmtInt(rw2)} ／ 最大 ${fmtInt(mp2)} → リスク密度 ${round(density2*100,1)}%<br>
+      <b style="color:#2563EB">健全度スコア = (1 − ${round(density2*100,1)}%) × 100 = ${k.governance_score} 点</b>
+      <span style="color:#64748b;font-size:.78rem">　※高リスクアクセスが少ないほどスコアが上がります${(App.aiExcludeDepts||[]).length?'（除外部署あり：'+esc((App.aiExcludeDepts||[]).join('・'))+'）':''}</span>
+    </div>` : '';
     document.getElementById('t3-exnote').innerHTML = exDeptN
       ? `<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ 部署除外を適用中：</b>「レポート設定」の野良AIチェックで選択されたユーザーが所属する部署（${esc((App.aiExcludeDepts||[]).join('・'))}）を、このタブの集計・グラフから除外して表示しています。</div>` : '';
 
@@ -221,12 +300,14 @@
 
   // ══ TAB4 PC稼働 ══
   function renderT4(){
-    const k=App.kpis, pc=App.pc_f, mj=App.monthsJp;
+    const k=App.kpis, pc=App.pc_f_ex||App.pc_f, mj=App.monthsJp;
+    const exUserN=(App.aiExcludeUsers||[]).length;
     const t4el=document.getElementById('t4');
     if(!t4el.dataset.init){
       t4el.dataset.init='1';
       t4el.innerHTML = `<div class="sec-title">⚡ PC稼働状況：組織健全性・業務偏重・深夜稼働リスク</div>
         <p class="hint">目的：個人の残業摘発ではなく、組織の業務偏重と深夜稼働によるセキュリティリスクを分析</p>
+        <div id="t4-exnote"></div>
         <div id="t4-metrics" class="metric-row"></div>
         <div class="grid2">${chartBox('c4-dept')}${chartBox('c4-ln')}</div>
         <div class="sec-title">稼働時間帯分布（リスク時間帯の可視化）</div><div id="c4-heatwrap"></div>
@@ -242,6 +323,14 @@
       document.getElementById('long-th').addEventListener('change', e=>{
         App.longThreshold=Math.min(24,Math.max(6,parseInt(e.target.value)||12)); renderRanking();
       });
+    }
+
+    // 除外ユーザー注記（TAB4先頭）
+    const exNoteEl=document.getElementById('t4-exnote');
+    if(exNoteEl){
+      exNoteEl.innerHTML = exUserN
+        ? `<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF">※除外ユーザー設定が適用されています（${exUserN}名を除外）。「レポート設定」パネルで確認・変更できます。</div>`
+        : '';
     }
 
     document.getElementById('t4-metrics').innerHTML =
@@ -267,7 +356,7 @@
   }
 
   function renderRanking(){
-    const pc=App.pc_f, th=App.longThreshold;
+    const pc=App.pc_f_ex||App.pc_f, th=App.longThreshold;
     const rank=CH.terminalRanking(pc, th);
     const wrap=document.getElementById('c4-rankwrap');
     if(!wrap.dataset.init){
@@ -282,7 +371,9 @@
           <div id="c4-longtable"></div>
           <button class="btn btn-ghost" id="btn-csv">📥 電源付きっぱなし疑いリスト を CSV でダウンロード</button>
         </div>
-        <div id="c4-long-no" class="status-msg status-ok" style="display:none"></div>`;
+        <div id="c4-long-no" class="status-msg status-ok" style="display:none"></div>
+        <div class="sec-title" style="border-left-color:#B91C1C">⚠️ 複合リスク端末（長時間＋深夜＋高リスクWeb）</div>
+        <div id="c4-composite-risk"></div>`;
       // クリック時点の最新データ（App._longCsvPayload）を参照するため、リスナーは骨格生成時に1回だけ登録
       document.getElementById('btn-csv').addEventListener('click', ()=>{
         const p=App._longCsvPayload; if(p) App._exportLongCsv(p.disp, p.cols, p.th);
@@ -315,6 +406,79 @@
         disp.map(r=>cols.map(c=> c==='稼働時間_h'?round((r['ログ時間_分']||0)/60,2): c==='深夜稼働'||c==='休日'?(r[c]?'✓':''): (r[c]==null?'':r[c]))));
       App._longCsvPayload = {disp, cols, th};
     }
+
+    // ── TASK 6: 複合リスク端末（長時間＋深夜＋高リスクWeb）──
+    renderCompositeRisk(pc, App.ac_f || [], th);
+  }
+
+  function renderCompositeRisk(pc_f, ac_f, longThreshold) {
+    const el = document.getElementById('c4-composite-risk');
+    if (!el) return;
+
+    // 長時間稼働端末セット
+    const longSet = new Set(
+      pc_f
+        .filter(r => (r['ログ時間_分'] || 0) > longThreshold * 60)
+        .map(r => r['端末エージェント名'])
+        .filter(Boolean)
+    );
+    // 深夜稼働端末セット
+    const nightSet = new Set(
+      pc_f.filter(r => r['深夜稼働']).map(r => r['端末エージェント名']).filter(Boolean)
+    );
+    // 高リスクWebアクセスユーザーセット
+    const highRiskUsers = new Set(
+      ac_f
+        .filter(r => r['Webアクセス'] && r['リスクレベル'] === 3)
+        .map(r => r.login_id != null ? String(r.login_id).trim().toLowerCase() : null)
+        .filter(Boolean)
+    );
+
+    // 3条件すべて該当する端末を抽出
+    const flagged = [];
+    const seen = new Set();
+    for (const term of longSet) {
+      if (!nightSet.has(term)) continue;
+      // 端末の台帳_login_idを取得
+      const rows = pc_f.filter(r => r['端末エージェント名'] === term);
+      const row = rows[0];
+      if (!row) continue;
+      const lid = row['台帳_login_id'] != null ? String(row['台帳_login_id']).trim().toLowerCase() : null;
+      if (!lid || !highRiskUsers.has(lid)) continue;
+      if (seen.has(term)) continue;
+      seen.add(term);
+      // フラグ数（何件の長時間記録が該当か）
+      const longDays = rows.filter(r => (r['ログ時間_分'] || 0) > longThreshold * 60).length;
+      const nightDays = rows.filter(r => r['深夜稼働']).length;
+      flagged.push({
+        term,
+        name: row['台帳_氏名'] || '',
+        dept: row['台帳_部署名'] || '',
+        comp: row['台帳_会社名'] || '',
+        loginId: lid,
+        longDays,
+        nightDays,
+        flagCount: (longDays > 0 ? 1 : 0) + (nightDays > 0 ? 1 : 0) + 1, // 高リスクWeb=1
+      });
+    }
+
+    if (flagged.length === 0) {
+      el.innerHTML = `<div class="status-msg status-ok">✅ 長時間稼働・深夜稼働・高リスクWebアクセスの3条件が重なる端末は検出されませんでした。</div>`;
+      return;
+    }
+
+    flagged.sort((a, b) => b.flagCount - a.flagCount || b.longDays - a.longDays);
+
+    el.innerHTML = `
+      <div class="warn-box" style="border-color:#B91C1C;background:#FFF1F2;margin-bottom:8px">
+        <b>⚠️ 複合リスク端末を ${flagged.length} 台検出しました。</b><br>
+        以下の端末は「長時間稼働（${longThreshold}h超）」「深夜稼働」「高リスクWebアクセス（リスクレベル3）」の<b>3条件すべて</b>が確認されています。<br>
+        情報漏洩・内部不正リスクが重なっている可能性があるため、優先的に実態確認を行うことをお勧めします。
+      </div>
+      ${tableHtml(
+        ['端末名','氏名','部署','会社','長時間稼働日数','深夜稼働日数','フラグ数'],
+        flagged.map(r => [r.term, r.name, r.dept, r.comp, r.longDays + '日', r.nightDays + '日', '★'.repeat(r.flagCount)])
+      )}`;
   }
 
   // TAB5/6 は exports.js / trends.js が定義（renderT5, renderT6 を上書き）

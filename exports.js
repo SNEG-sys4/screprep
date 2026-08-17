@@ -68,13 +68,47 @@
       let html=`<div class="sec-title">📄 経営幹部向け ITガバナンスレポート出力</div>
         <div class="note-box">含めたいセクション・グラフ・表をチェックして各ボタンを押してください。コメント欄に入力するとレポートに埋め込まれます（空欄=手書き用スペース）。</div>
         <div class="status-msg status-info" id="t5-scope"></div>
+        <label class="chk" style="margin:8px 0;display:inline-flex;align-items:center;gap:6px">
+          <input type="checkbox" id="chk-skip-empty-comment">
+          コメント欄が空の場合は省略する（手書きスペースを出力しない）
+        </label>
         <div class="sec-title">📋 出力するセクションを選択</div><div class="rep-cols"><div>`;
       SECS.forEach((s,i)=>{
         if(i===3) html+='</div><div>'; // 右カラムへ
         html+=`<details class="rep-sec" open><summary>${s.icon} ${s.name}</summary>`;
         s.opts.forEach(([key,lbl,def])=>{ html+=`<label class="chk"><input type="checkbox" data-sec="${key}" ${def?'checked':''}> ${lbl}</label>`; });
-        html+=`<label class="chk"><input type="checkbox" data-sec="${s.cmt}_comment" checked> コメント欄を追加</label>
-          <textarea data-cmt="${s.id}" placeholder="コメント（空欄=手書きスペース）"></textarea></details>`;
+        if(s.id==='action_plan'){
+          // アクションプラン専用UI
+          html+=`<div id="action-plan-rows" style="margin:10px 0">`;
+          for(let idx=0;idx<5;idx++){
+            html+=`<div class="ap-row" data-idx="${idx}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+              <select class="ap-pri" style="width:80px;border:1px solid #cbd5e1;border-radius:6px;padding:4px">
+                <option value="">優先度</option>
+                <option value="HIGH">HIGH</option>
+                <option value="MED">MED</option>
+                <option value="LOW">LOW</option>
+              </select>
+              <select class="ap-cat" style="width:120px;border:1px solid #cbd5e1;border-radius:6px;padding:4px">
+                <option value="">分類</option>
+                <option value="Webガバナンス">Webガバナンス</option>
+                <option value="PC稼働管理">PC稼働管理</option>
+                <option value="IT資産">IT資産</option>
+                <option value="セキュリティ対策">セキュリティ対策</option>
+                <option value="組織・ルール整備">組織・ルール整備</option>
+                <option value="SCS★3対応">SCS★3対応</option>
+              </select>
+              <input class="ap-action" type="text" placeholder="アクション内容" style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px">
+              <input class="ap-deadline" type="text" placeholder="期限 例：2026年9月" style="width:130px;border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px">
+              <input class="ap-owner" type="text" placeholder="担当" style="width:90px;border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px">
+            </div>`;
+          }
+          html+=`</div>
+          <button class="btn btn-ghost" id="btn-ap-auto" style="margin-bottom:8px">⚡ 重点分析から自動生成</button>`;
+        } else {
+          html+=`<label class="chk"><input type="checkbox" data-sec="${s.cmt}_comment" checked> コメント欄を追加</label>
+            <textarea data-cmt="${s.id}" placeholder="コメント（空欄=手書きスペース）"></textarea>`;
+        }
+        html+=`</details>`;
       });
       html+=`</div></div>
         <div class="btn-row">
@@ -87,6 +121,44 @@
       document.getElementById('btn-word').addEventListener('click', ()=>runExport('word'));
       document.getElementById('btn-html').addEventListener('click', ()=>runExport('html'));
       document.getElementById('btn-excel').addEventListener('click', ()=>runExport('excel'));
+
+      // 自動生成ボタン
+      document.getElementById('btn-ap-auto').addEventListener('click', ()=>{
+        const F = analyzeFocus();
+        const suggestions = [];
+        if(F.ai.shadow > 0){
+          suggestions.push({ pri:'HIGH', cat:'Webガバナンス',
+            action:`野良AI(${F.ai.shadow.toLocaleString()}件)対策：許可AIの導入とガイドライン策定`,
+            deadline:'', owner:'システム課' });
+        }
+        if(F.power.n > 0){
+          suggestions.push({ pri:'HIGH', cat:'PC稼働管理',
+            action:`電源つけっぱ(${F.power.n}件/${F.power.terms}台)対策：自動シャットダウンポリシー適用`,
+            deadline:'', owner:'システム課' });
+        }
+        if((App.kpis.expired_devices||0) > 0){
+          suggestions.push({ pri:'MED', cat:'IT資産',
+            action:`減価償却切れ端末(${App.kpis.expired_devices}台)のリプレース計画策定`,
+            deadline:'', owner:'システム課' });
+        }
+        if(F.night.rate >= 2){
+          suggestions.push({ pri:'MED', cat:'PC稼働管理',
+            action:`深夜稼働(${F.night.rate}%)の実態確認・ポリシー整備`,
+            deadline:'', owner:'人事部' });
+        }
+        suggestions.push({ pri:'LOW', cat:'SCS★3対応',
+          action:'SCS評価★3取得に向けてCISO任命・情報セキュリティ基本方針の策定',
+          deadline:'', owner:'経営企画室' });
+        document.querySelectorAll('#action-plan-rows .ap-row').forEach((row, i)=>{
+          const s = suggestions[i];
+          if(!s) return;
+          row.querySelector('.ap-pri').value = s.pri;
+          row.querySelector('.ap-cat').value = s.cat;
+          row.querySelector('.ap-action').value = s.action;
+          row.querySelector('.ap-deadline').value = s.deadline;
+          row.querySelector('.ap-owner').value = s.owner;
+        });
+      });
     }
     const period = App.monthsJp.length?`${App.monthsJp[0]}〜${App.monthsJp[App.monthsJp.length-1]}`:'全期間';
     document.getElementById('t5-scope').textContent = `📋 出力対象：${period} ／ 対象会社：${App.outCompanies.join(' / ')}`;
@@ -97,6 +169,18 @@
     document.querySelectorAll('#t5 input[data-sec]').forEach(el=>secs[el.dataset.sec]=el.checked);
     document.querySelectorAll('#t5 textarea[data-cmt]').forEach(el=>cmts[el.dataset.cmt]=el.value.trim());
     return {secs,cmts};
+  }
+  function collectActionPlan(){
+    const rows=[];
+    document.querySelectorAll('#action-plan-rows .ap-row').forEach(row=>{
+      const pri=row.querySelector('.ap-pri').value;
+      const cat=row.querySelector('.ap-cat').value;
+      const action=row.querySelector('.ap-action').value.trim();
+      const deadline=row.querySelector('.ap-deadline').value.trim();
+      const owner=row.querySelector('.ap-owner').value.trim();
+      if(action) rows.push({pri,cat,action,deadline,owner});
+    });
+    return rows;
   }
   async function runExport(kind){
     const st=document.getElementById('rep-status');
@@ -162,7 +246,7 @@
     const catImg=await fh(CH.figCategoryBar(c.web),360);
     const monImg=await fh(CH.figMonthlyCategory(c.web,mj),360);
     const compImg=await fh(CH.figCompanyGovernance(c.web),320);
-    const deptImg=await fh(CH.figDeptAvgHours(App.pc_f),380);
+    const deptImg=await fh(CH.figDeptAvgHours(App.pc_f_ex||App.pc_f),380);
     const hwImg=await fh(CH.figCompanyDevices(App.hw_f),320);
     const badge=RD.badge;
     function card(level,title,st,mv,unit,ins,act){ const[ic,lb,cc,bg]=badge(level);
@@ -270,6 +354,15 @@
     function commentBox(text){ return fullTable([
       new TableRow({children:[ cell(para(run('📝 担当者コメント・現場知識メモ',{bold:true,size:18,color:'B45309'})),{fill:'FFF9E6'}) ]}),
       new TableRow({children:[ cell( text?para(run(text,{size:18})):[para(run(' ')),para(run(' ')),para(run(' '))], {fill:'FFFDF5'}) ]}) ]); }
+    function maybeComment(secKey, cmtKey){ // secKey例: 'summary_comment', cmtKey例: 'summary'
+      if(!secs[secKey]) return;
+      const cmtText=cmts[cmtKey]||'';
+      if(cmtText){ children.push(commentBox(cmtText)); }
+      else {
+        const skipEmpty=document.getElementById('chk-skip-empty-comment')&&document.getElementById('chk-skip-empty-comment').checked;
+        if(!skipEmpty){ children.push(commentBox('')); }
+      }
+    }
     function dfTable(cols,rows){ const header=new TableRow({children:cols.map(cn=>cell(para(run(String(cn),{bold:true,size:16,color:WHITE})),{fill:NAVY}))});
       const body=rows.slice(0,30).map((r,i)=>new TableRow({children:r.map(v=>cell(para(run(String(v==null?'':v),{size:16})),{fill:i%2?'FFFFFF':'F8FAFC'}))}));
       return fullTable([header,...body]); }
@@ -288,7 +381,7 @@
       children.push(kpiRow([['リスク遮断完遂率',c.ir+'%',c.irL],['Webガバナンス健全度',c.gs+'点',c.gsL],['深夜稼働率',c.ln+'%',c.lnL]]));
       children.push(para(run(' ')));
       children.push(insightCard('🎯','総合評価',c.gsL,`今期は${stLBL[c.gsL]}の状態です。主要KPIの詳細は各セクションをご確認ください。`,'優先度の高い項目から対応を検討してください。','総合スコア',c.gs+'点'));
-      if(secs.summary_comment) children.push(commentBox(cmts.summary)); }
+      maybeComment('summary_comment','summary'); }
 
     if(secs.web_risk){ children.push(para(new PageBreak())); children.push(heading('2. リスク遮断・Webガバナンス分析',RED)); children.push(para(run(' ')));
       const hr=k.high_risk_count, mr=k.medium_risk_count;
@@ -299,7 +392,7 @@
       children.push(insightCard('🟡','SNS・生成AI（中リスクの内訳）',mr>0?'yellow':'green',
         `中リスク計 ${fmtInt(mr)}件の内訳は SNS ${fmtInt(k.sns_count||0)}件・生成AI ${fmtInt(k.ai_count||0)}件。${(k.ai_count||0)>=(k.sns_count||0)?'生成AIへの機密情報入力リスクが主因':'SNSでの情報拡散・私的利用が主因'}とみられます。${(App.aiExcludeDepts||[]).length?'（「レポート設定」の野良AI除外対象者が所属する部署「'+App.aiExcludeDepts.join('・')+'」は本集計から除外しています）':''}`,'多い方から対応：生成AIは許可ツール導入＋入力禁止情報のガイドライン、SNSは業務目的の確認と周知。','中リスク計',fmtInt(mr)+'件'));
       if(secs.web_graph){ children.push(await graph(CH.figCategoryBar(c.web),320)); children.push(await graph(CH.figMonthlyCategory(c.web,mj),320)); }
-      if(secs.web_risk_comment) children.push(commentBox(cmts.web_risk)); }
+      maybeComment('web_risk_comment','web_risk'); }
 
     if(secs.pc_ops){ children.push(para(new PageBreak())); children.push(heading('3. PC稼働状況・組織健全性','2563EB')); children.push(para(run(' ')));
       children.push(kpiRow([['業務偏重指数',c.wc+'倍',c.wcL],['深夜稼働率',c.ln+'%',c.lnL],['休日稼働件数',fmtInt(k.holiday_active)+'件',k.holiday_active===0?'green':'yellow']]));
@@ -312,7 +405,7 @@
       if(secs.pc_dept_table){ const m=g(App.pc_f.filter(r=>!isNil(r['台帳_会社名'])&&!isNil(r['台帳_部署名'])),r=>r['台帳_会社名']+'|'+r['台帳_部署名']);
         const rows=[]; m.forEach((v,key)=>{const[co,de]=key.split('|');rows.push([co,de,round(mean(v.map(r=>r['ログ時間_分']))/60,1),v.filter(r=>r['深夜稼働']).length,v.filter(r=>r['時間外稼働']).length,new Set(v.map(r=>r['日付_dt']&&r['日付_dt'].getTime())).size]);});
         rows.sort((a,b)=>b[2]-a[2]); children.push(dfTable(['会社','部署','平均h','深夜','時間外','稼働日'],rows)); }
-      if(secs.pc_ops_comment) children.push(commentBox(cmts.pc_ops)); }
+      maybeComment('pc_ops_comment','pc_ops'); }
 
     if(secs.power_on){ children.push(para(new PageBreak())); children.push(heading('4. 電源付きっぱなし検出（セキュリティリスク）','7C3AED')); children.push(para(run(' ')));
       const th=App.longThreshold, longRows=App.pc_f.filter(r=>(r['ログ時間_分']||0)>th*60);
@@ -337,8 +430,23 @@
 
     if(secs.action_plan){ children.push(para(new PageBreak())); children.push(heading('6. 次期アクションプラン','059669')); children.push(para(run(' ')));
       const hdr=new TableRow({children:['優先度','分類','アクション内容','期限','担当'].map(h=>cell(para(run(h,{bold:true,size:18,color:WHITE})),{fill:'059669'}))});
-      const body=[1,2,3,4,5].map(i=>{const pri=i<=2?'HIGH':i<=4?'MED':'LOW'; return new TableRow({children:[cell(para(run(pri,{bold:true,size:18})),{fill:pri==='HIGH'?'FEE2E2':pri==='MED'?'FFFBEB':'F1F5F9'}),cell(para(run(' '))),cell(para(run(' '))),cell(para(run(' '))),cell(para(run(' ')))]});});
-      children.push(fullTable([hdr,...body]));
+      const apRows=collectActionPlan();
+      let apBody;
+      if(apRows.length===0){
+        apBody=[new TableRow({children:[cell(para(run('(アクションプランが入力されていません)',{size:16,color:SLATE})),{fill:'F8FAFC'}),cell(para(run(' '))),cell(para(run(' '))),cell(para(run(' '))),cell(para(run(' ')))]})];
+      } else {
+        apBody=apRows.map(r=>{
+          const priColor=r.pri==='HIGH'?'FEE2E2':r.pri==='MED'?'FFFBEB':'F1F5F9';
+          return new TableRow({children:[
+            cell(para(run(r.pri||'',{bold:true,size:18})),{fill:priColor}),
+            cell(para(run(r.cat||'',{size:16}))),
+            cell(para(run(r.action,{size:16}))),
+            cell(para(run(r.deadline||'',{size:16}))),
+            cell(para(run(r.owner||'',{size:16})))
+          ]});
+        });
+      }
+      children.push(fullTable([hdr,...apBody]));
       if(secs.action_plan_comment) children.push(commentBox(cmts.action_plan)); }
 
     if(secs.focus){ children.push(para(new PageBreak())); children.push(heading('7. 重点分析：問題の切り分けと対策','B45309')); children.push(para(run(' ')));
