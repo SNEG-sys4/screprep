@@ -83,11 +83,13 @@
     html += `<div class="sec-title">経営層向け 評価コメント</div>`;
 
     html += siaCard(irS,'① セキュリティ統制：リスク遮断完遂率',
-      `対象期間の監視イベント ${fmtInt(k.total_risk_events)}件 ／ 遮断・検知完遂率 ${ir}%`,
-      irS==='green' ? '現在のセキュリティポリシーはしっかり機能しています。未許可デバイスや禁止アプリのブロックが適切に行われており、情報漏洩リスクへの対策は安定した水準を維持できています。'
+      `対象期間の監視イベント ${fmtInt(k.total_risk_events)}件 ／ 遮断・検知完遂率 ${ir===null||ir===undefined?'N/A（遮断結果データなし）':ir+'%'}`,  
+      irS==='na' ? 'リスク遮断結果を示すデータ（BLOCK/DENY等）がログ中に見つからないため、遮断完遂率を算出できませんでした。'
+        : irS==='green' ? '現在のセキュリティポリシーはしっかり機能しています。'
         : '一部のイベントで遮断が完了していない可能性があります。ポリシーの抜け穴や、新しいデバイス・アプリへの対応漏れが生じている可能性を確認しておく必要があります。',
-      irS==='green' ? '現行ポリシーの定期的な見直しを継続します。四半期ごとに新しい脅威動向を反映し、ルールの鮮度を保ちます。'
-        : '未対応イベントの原因を確認し、ポリシーの見直しを次回の改訂サイクルに組み込みます。まずは管理者側での事実確認から始めましょう。', ir,'%');
+      irS==='na' ? 'ログに遮断結果の列（「BLOCK」「DENY」等）が含まれる場合に表示されます。データ存在時は自動計算されます。'
+        : irS==='green' ? '現行ポリシーの定期的な見直しを継続します。'
+        : '未対応イベントの原因を確認し、ポリシーの見直しを次回の改訂サイクルに組み込みます。', ir===null||ir===undefined?'N/A':'', ir===null||ir===undefined?'':('%'));
 
     html += siaCard(gsS,'② Webアクセス：ガバナンス健全度スコア',
       `全Webアクセス ${fmtInt(tw)}件 ／ 高リスク ${fmtInt(hr)}件（${tw?round(hr/tw*100,1):0}%）／ 中リスク ${fmtInt(mr)}件（SNS ${fmtInt(sns)}件・AI ${fmtInt(ai)}件／${ai>=sns?'AIが主因':'SNSが主因'}）${exNote}`,
@@ -199,7 +201,7 @@
     const devN=ac.filter(r=>r['デバイス操作']).length;
     document.getElementById('t2-metrics').innerHTML =
       metric('監視イベント総数',fmtInt(k.total_risk_events))+metric('遮断・検知件数',fmtInt(k.blocked_count))+
-      metric('遮断完遂率',k.interception_rate+'%')+metric('デバイス操作検知',fmtInt(devN));
+      metric('遮断完遂率', k.interception_rate===null||k.interception_rate===undefined ? 'N/A' : k.interception_rate+'%')+metric('デバイス操作検知',fmtInt(devN));
 
     plot('c2-ev', CH.figMonthEventStack(ac, mj));
 
