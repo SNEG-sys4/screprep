@@ -21,11 +21,16 @@
 
   function badge(level){
     return ({ green:['🟢','良好','#059669','#ECFDF5'], yellow:['🟡','要注意','#D97706','#FFFBEB'],
-      red:['🔴','対応が必要です','#DC2626','#FEF2F2'] }[level] || ['🟢','良好','#059669','#ECFDF5']);
+      red:['🔴','対応が必要です','#DC2626','#FEF2F2'], na:['⚪','評価対象データなし','#64748b','#F8FAFC'] }[level] || ['🟢','良好','#059669','#ECFDF5']);
   }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
   function scoreCard(title, value, unit, level){
+    if(value === null || value === undefined){
+      return `<div class="score-card" style="background:#F8FAFC;border-color:#94A3B8">
+        <div class="lbl">${title}</div><div class="val" style="color:#64748b">N/A</div>
+        <div class="bd" style="color:#64748b">⚪ 評価対象データなし</div></div>`;
+    }
     const [ic,lb,c,bg]=badge(level);
     return `<div class="score-card" style="background:${bg};border-color:${c}">
       <div class="lbl">${title}</div><div class="val" style="color:${c}">${value}${unit}</div>
@@ -33,11 +38,13 @@
   }
   function siaCard(level, title, statusText, insight, action, metricVal, metricUnit){
     const [ic,lb,c,bg]=badge(level);
-    const mv = metricVal!==undefined && metricVal!==null ? `<div class="metric-big" style="color:${c}">${metricVal}${metricUnit||''}</div>`:'';
+    const metricDisplay = (metricVal !== undefined && metricVal !== null)
+      ? `<div class="metric-big" style="color:${c}">${metricVal}${metricUnit||''}</div>`
+      : '';
     return `<div class="sia" style="background:${bg};border-color:${c}">
       <div class="head"><span style="font-size:1.3rem">${ic}</span><span class="title">${title}</span>
         <span class="badge" style="background:${c}">${lb}</span></div>
-      ${mv}<div class="st">${statusText}</div><hr>
+      ${metricDisplay}<div class="st">${statusText}</div><hr>
       <div class="k" style="color:${c}">INSIGHT</div><div class="v">${insight}</div>
       <div class="k" style="color:${c}">ACTION</div><div class="v">${action}</div></div>`;
   }
@@ -65,7 +72,7 @@
     const highCats=Object.keys(DC.SITE_GOVERNANCE).filter(c=>DC.SITE_GOVERNANCE[c].risk===3 && (k.cat_counts||{})[c]>0);
     const highStr=highCats.length?highCats.join('・'):'なし';
     const exDepts=App.aiExcludeDepts||[];
-    const exNote=exDepts.length?`　※部署除外適用中（${esc(exDepts.join('・'))}を除く）`:'';
+    const exNote=exDepts.length?`　※AI正規利用除外適用中`:'';
 
     let html = `<div class="sec-title">📋 ITガバナンス評価サマリー ｜ 対象期間：${period}</div>`;
     html += `<div class="grid4">
@@ -231,7 +238,7 @@
 
   // ══ TAB3 Webガバナンス ══
   function renderT3(){
-    const k=App.kpis, ac=App.ac_web_f||App.ac_f, mj=App.monthsJp;
+    const k=App.kpis, ac=App.ac_web_analysis||App.ac_f, mj=App.monthsJp;
     const web=ac.filter(r=>r['Webアクセス'] && !isNil(r['リスク分類']));
     const exDeptN=(App.aiExcludeDepts||[]).length;
     const t3el=document.getElementById('t3');
@@ -261,7 +268,7 @@
     document.getElementById('t3-midnote').innerHTML =
       `<b>🔎 中リスクの内訳（どちらが原因か）：</b> SNS ${fmtInt(k.sns_count||0)}件 ／ AI（生成AI）${fmtInt(k.ai_count||0)}件　→ <b style="color:#b45309">${(k.ai_count||0)>=(k.sns_count||0)?'生成AIが主因':'SNSが主因'}</b>`;
     // スコア内訳（TASK 4）
-    const web2 = (App.ac_web_f||App.ac_f).filter(r=>r['Webアクセス']);
+    const web2 = (App.ac_web_analysis||App.ac_f).filter(r=>r['Webアクセス']);
     const tw2=web2.length, highN2=web2.filter(r=>r['リスクレベル']===3).length,
           midN2=web2.filter(r=>r['リスクレベル']===2).length, lowN2=web2.filter(r=>r['リスクレベル']===1).length;
     const rw2=highN2*3+midN2*2+lowN2*1, mp2=tw2*3;
@@ -278,7 +285,7 @@
       <span style="color:#64748b;font-size:.78rem">　※高リスクアクセスが少ないほどスコアが上がります${(App.aiExcludeDepts||[]).length?'（除外部署あり：'+esc((App.aiExcludeDepts||[]).join('・'))+'）':''}</span>
     </div>` : '';
     document.getElementById('t3-exnote').innerHTML = exDeptN
-      ? `<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ 部署除外を適用中：</b>「レポート設定」の野良AIチェックで選択されたユーザーが所属する部署（${esc((App.aiExcludeDepts||[]).join('・'))}）を、このタブの集計・グラフから除外して表示しています。</div>` : '';
+      ? `<div class="note-box" style="border-color:#7C3AED;background:#F5F3FF"><b>🏷️ AI正規利用除外を適用中：</b>選択されたユーザーのAI外部サービスアクセスのみを除外しています。他のカテゴリ（クラウドストレージ・SNS等）は通常どおり集計されます。</div>` : '';
 
     plot('c3-cat', CH.figCategoryBar(web));
     plot('c3-month', CH.figMonthlyCategory(web, mj));
@@ -300,7 +307,7 @@
 
   // ══ TAB4 PC稼働 ══
   function renderT4(){
-    const k=App.kpis, pc=App.pc_f_ex||App.pc_f, mj=App.monthsJp;
+    const k=App.kpis, pc=App.pc_analysis||App.pc_f, mj=App.monthsJp;
     const exUserN=(App.aiExcludeUsers||[]).length;
     const t4el=document.getElementById('t4');
     if(!t4el.dataset.init){
@@ -312,8 +319,8 @@
         <div class="grid2">${chartBox('c4-dept')}${chartBox('c4-ln')}</div>
         <div class="sec-title">稼働時間帯分布（リスク時間帯の可視化）</div><div id="c4-heatwrap"></div>
         <div class="sec-title">部署別 稼働状況ランキング（四半期集計）</div><div id="c4-depttable"></div>
-        <div class="sec-title">🔌 PC稼働時間ランキング ＆ 電源付きっぱなし検出</div>
-        <div class="warn-box"><b>⚠️ なぜ「電源付きっぱなし」がセキュリティリスクなのか</b><br>
+        <div class="sec-title">🔌 PC稼働時間ランキング ＆ 長時間稼働候補（セキュリティ確認）</div>
+        <div class="warn-box"><b>⚠️ なぜ「長時間稼働候補」がセキュリティリスクなのか</b><br>
           <b>① 不正アクセスの踏み台：</b>誰もいないPCがネットワーク接続されたままだと、外部からの侵入口になりえます。<br>
           <b>② マルウェア感染の拡大：</b>感染端末が長時間稼働していると、社内ネットワーク全体への被害拡大リスクが高まります。<br>
           <b>③ 内部不正・のぞき見：</b>ロックされていない放置PCは、物理的な情報漏洩の機会を与えます。<br>
@@ -335,7 +342,7 @@
 
     document.getElementById('t4-metrics').innerHTML =
       metric('対象稼働記録',fmtInt(pc.length)+'件')+metric('業務偏重指数',k.workload_concentration+'倍')+
-      metric('深夜稼働件数',fmtInt(k.latenight_days)+'件')+metric('休日稼働件数',fmtInt(k.holiday_active)+'件');
+      metric('深夜稼働件数',fmtInt(k.latenight_days)+'件')+metric('土日稼働件数',fmtInt(k.holiday_active)+'件');
 
     plot('c4-dept', CH.figDeptAvgHours(pc));
     plot('c4-ln', CH.figMonthlyLatenight(pc, mj, App.cfg.LATE_NIGHT_START));
@@ -350,13 +357,13 @@
       rows.push([co,de, round(mean(v.map(r=>r['ログ時間_分']))/60,1), v.filter(r=>r['深夜稼働']).length,
         v.filter(r=>r['休日']).length, v.filter(r=>r['時間外稼働']).length, new Set(v.map(r=>r['日付_dt']&&r['日付_dt'].getTime())).size]); });
     rows.sort((a,b)=>b[2]-a[2]);
-    document.getElementById('c4-depttable').innerHTML = tableHtml(['会社名','部署名','平均稼働時間','深夜稼働','休日稼働','時間外稼働','稼働日数'],rows);
+    document.getElementById('c4-depttable').innerHTML = tableHtml(['会社名','部署名','平均稼働時間','深夜稼働','土日稼働','時間外稼働','稼働日数'],rows);
 
     renderRanking();
   }
 
   function renderRanking(){
-    const pc=App.pc_f_ex||App.pc_f, th=App.longThreshold;
+    const pc=App.pc_analysis||App.pc_f, th=App.longThreshold;
     const rank=CH.terminalRanking(pc, th);
     const wrap=document.getElementById('c4-rankwrap');
     if(!wrap.dataset.init){
@@ -364,12 +371,12 @@
       wrap.innerHTML = `<div class="sec-title" style="border-left-color:#7C3AED">📊 端末別 平均稼働時間ランキング（上位30件）</div>
         ${chartBox('c4-rank')}
         <div id="c4-ranktable"></div>
-        <div class="sec-title" style="border-left-color:#DC2626" id="c4-long-title">🚨 電源付きっぱなし疑い一覧</div>
+        <div class="sec-title" style="border-left-color:#DC2626" id="c4-long-title">🚨 長時間稼働候補 一覧</div>
         <div id="c4-long-yes">
           <div id="c4-long-metrics" class="metric-row"></div>
           ${chartBox('c4-longm')}
           <div id="c4-longtable"></div>
-          <button class="btn btn-ghost" id="btn-csv">📥 電源付きっぱなし疑いリスト を CSV でダウンロード</button>
+          <button class="btn btn-ghost" id="btn-csv">📥 長時間稼働候補リスト を CSV でダウンロード</button>
         </div>
         <div id="c4-long-no" class="status-msg status-ok" style="display:none"></div>
         <div class="sec-title" style="border-left-color:#B91C1C">⚠️ 複合リスク端末（長時間＋深夜＋高リスクWeb）</div>
@@ -386,7 +393,7 @@
       ['端末名','氏名','部署','会社','平均h','最大h','長時間日数','稼働日数','長時間率%','深夜','判定'],
       top.map(r=>[r.term,r.name||'',r.dept||'',r.comp||'',r.avg,r.max,r.longDays,r.days,r.longRate,r.night,r.flag]));
 
-    document.getElementById('c4-long-title').textContent = `🚨 電源付きっぱなし疑い一覧（${th}時間超）`;
+    document.getElementById('c4-long-title').textContent = `🚨 長時間稼働候補 一覧（${th}時間超）`;
     const longRows = pc.filter(r=>(r['ログ時間_分']||0)>th*60);
     const yesEl=document.getElementById('c4-long-yes'), noEl=document.getElementById('c4-long-no');
     if(longRows.length===0){

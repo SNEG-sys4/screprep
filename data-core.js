@@ -74,6 +74,8 @@
   }
 
   function getStatus(value, metric, higherIsBetter) {
+    // P0-8: null はデータなし = 'na'
+    if (value === null || value === undefined) return 'na';
     if (higherIsBetter === undefined) higherIsBetter = true;
     const th = THRESHOLDS[metric] || { green:80, yellow:60 };
     if (higherIsBetter) {
@@ -159,6 +161,16 @@
     });
   }
 
+  // ── P0-6: 深夜判定共通関数 ──────────────────────────
+  // 条件：終了 >= LATE_NIGHT_START OR 開始 < EARLY_MORNING_END
+  function isLateNight(row, cfg) {
+    cfg = Object.assign({}, DEFAULTS, cfg);
+    const endH   = row['終了時刻'] ? row['終了時刻'].getHours() : null;
+    const startH = row['開始時刻'] ? row['開始時刻'].getHours() : null;
+    return (endH !== null && endH >= cfg.LATE_NIGHT_START) ||
+           (startH !== null && startH < cfg.EARLY_MORNING_END);
+  }
+
   // ── PC稼働ログロード ──────────────────────────────
   function loadPc(rows, cfg) {
     cfg = Object.assign({}, DEFAULTS, cfg);
@@ -173,22 +185,22 @@
       r['開始時刻'] = combineDateTime(d, r['初回ログ時刻']);
       r['終了時刻'] = combineDateTime(d, r['最終ログ時刻']);
       r['ログ時間_分'] = hmToMinutes(r['ログ時間']);
+      // P0-6: isLateNight共通関数を使用
+      r['深夜稼働'] = isLateNight(r, cfg);
       const endH = r['終了時刻'] ? r['終了時刻'].getHours() : null;
-      const startH = r['開始時刻'] ? r['開始時刻'].getHours() : null;
-      r['深夜稼働'] = (endH !== null && endH >= cfg.LATE_NIGHT_START) ||
-                      (startH !== null && startH < cfg.EARLY_MORNING_END);
       r['時間外稼働'] = (endH !== null && endH >= cfg.OVERTIME_THRESHOLD);
       return r;
     });
   }
 
-  // フィルタ後の再計算（app.py 278-279 行：終了時刻のみで判定）
+  // フィルタ後の再計算（P0-6: isLateNight共通関数で統一）
   function recomputePcFlags(rows, cfg) {
     cfg = Object.assign({}, DEFAULTS, cfg);
     for (const r of rows) {
       const endH = r['終了時刻'] ? r['終了時刻'].getHours() : null;
       r['時間外稼働'] = (endH !== null && endH >= cfg.OVERTIME_THRESHOLD);
-      r['深夜稼働']   = (endH !== null && endH >= cfg.LATE_NIGHT_START);
+      // P0-6: loadPcと同一のisLateNight関数を使用（終了のみ判定から変更）
+      r['深夜稼働'] = isLateNight(r, cfg);
     }
     return rows;
   }
@@ -278,7 +290,9 @@
   function uniqueCount(rows, keyFn){ const s = new Set(); for(const r of rows){ const k=keyFn(r); if(!isNil(k)) s.add(k);} return s.size; }
   function round(v, n){ const f = Math.pow(10,n||0); return Math.round(v*f)/f; }
 
-  // ── ②Webガバナンス健全度（部署除外を適用したacを渡せば、その除外を反映した集計を返す） ──
+  // ── ②Webガバナンス健全度
+  // P0-1: AI除外はユーザー×カテゴリ単位で適用したacを渡すこと（部署除外は廃止）
+  // P0-8: Webアクセス0件 → governance_score = null（100点ではなくN/A）
   function computeWebGovernance(ac) {
     const kpis = {};
     const web = ac.filter(r => r['Webアクセス']);
@@ -297,27 +311,37 @@
       kpis.sns_count = catCounts['SNS']||0;
       kpis.ai_count = catCounts['AI・外部サービス']||0;
     } else {
-      kpis.governance_score = 100.0; kpis.cat_counts = {}; kpis.total_web = 0;
+      // P0-8: 0件はN/A（nullを設定）
+      kpis.governance_score = null; kpis.cat_counts = {}; kpis.total_web = 0;
       kpis.high_risk_count = 0; kpis.medium_risk_count = 0; kpis.sns_count = 0; kpis.ai_count = 0;
     }
     return kpis;
   }
 
-  // ── KPI計算エンジン（app.py calc_governance_kpis 忠実移植） ──
+  // ── KPI計算エンジン ──
   function calcGovernanceKpis(pc, ac, hw) {
     const kpis = {};
 
     // ① リスク遮断完遂率
+    // P0-2: 明確な遮断結果（BLOCK/DENY/禁止/防止成功）が確認できない場合は null（N/A）
+    // 対象イベント0件もN/A
     const blockEvents = ac.filter(r => /監視|遮断|禁止/.test(strip(r['種類'])));
-    const hasBlockCol = ac.some(r => '防止・禁止' in r);
-    const highRiskEvents = hasBlockCol ? ac.filter(r => !isNil(r['防止・禁止'])) : [];
     const totalRiskEvents = blockEvents.length;
-    const blockedCount = highRiskEvents.length > 0 ? highRiskEvents.length : totalRiskEvents;
-    const interceptionRate = totalRiskEvents > 0
-      ? Math.min(100, blockedCount / totalRiskEvents * 100) : 100;
-    kpis.interception_rate = round(interceptionRate, 1);
+    // 実データで遮断成功を示す値（BLOCK/DENY/禁止/防止成功）を持つレコードを確認
+    const BLOCK_VALUES = /^(block|deny|禁止|防止成功)$/i;
+    const hasBlockCol = ac.some(r => '防止・禁止' in r);
+    const actualBlockedEvents = hasBlockCol
+      ? blockEvents.filter(r => !isNil(r['防止・禁止']) && BLOCK_VALUES.test(strip(r['防止・禁止'])))
+      : [];
+    const canJudge = hasBlockCol && actualBlockedEvents.length > 0;
+    // P0-2/P0-8: 判定不能または0件の場合 null
+    if (!canJudge || totalRiskEvents === 0) {
+      kpis.interception_rate = null;
+    } else {
+      kpis.interception_rate = round(Math.min(100, actualBlockedEvents.length / totalRiskEvents * 100), 1);
+    }
     kpis.total_risk_events = totalRiskEvents;
-    kpis.blocked_count = blockedCount;
+    kpis.blocked_count = actualBlockedEvents.length;
 
     // ② ガバナンス健全度
     Object.assign(kpis, computeWebGovernance(ac));
@@ -362,7 +386,7 @@
     SITE_GOVERNANCE, THRESHOLDS, DEFAULTS, BASE_CLR, STATUS_COLORS, STATUS_LABELS,
     isNil, classifyUrl, fmtMonth, getStatus, parsePcDate, hmToMinutes, combineDateTime,
     ymKey, parseDateLoose, num, strip,
-    loadHw, loadPc, recomputePcFlags, loadAc, joinLedgers,
+    loadHw, isLateNight, loadPc, recomputePcFlags, loadAc, joinLedgers,
     groupBy, mean, sum, uniqueCount, round, calcGovernanceKpis, computeWebGovernance,
   };
 });

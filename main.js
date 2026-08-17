@@ -11,7 +11,12 @@
     cfg:{LATE_NIGHT_START:22, EARLY_MORNING_END:6, OVERTIME_THRESHOLD:20}, longThreshold:12,
     allMonths:[], allCompanies:[], allGroups:[],
     sel:{months:[],companies:[],groups:[]},
-    aiExcludeUsers:[], aiExcludeDepts:[],
+    aiExcludeUsers:[], aiExcludeDepts:[], // aiExcludeDepts は後方互換で残すがKPIロジックには使用しない
+    // P0-4: 最終集計対象データ（フィルタ→除外ユーザー適用済み）
+    pc_analysis: [], // PC: pc_f_ex と同一（統一参照名）
+    ac_web_analysis: [], // Web: AI除外（ユーザー×AIカテゴリ）適用済み
+    // P0-3: 所属会社不明PC件数（別管理）
+    pcUnknownCompanyCount: 0,
   });
 
   // ── 汎用ダウンロード ──
@@ -185,26 +190,50 @@
   // ── フィルタ適用＋再計算＋描画 ──
   function applyFilters(){
     const selM=App.sel.months, selC=App.sel.companies, selG=App.sel.groups;
-    App.pc_f=App.pc.filter(r=>selM.includes(r['月']) && selG.includes(r['所属グループ名']));
-    App.ac_f=App.ac.filter(r=>selM.includes(r['月']));
-    if(selC.length && selC.length!==App.allCompanies.length){
-      App.ac_f=App.ac_f.filter(r=>selC.includes(r['台帳_会社名']) || DC.isNil(r['台帳_会社名']));
+    const companyFilter = selC.length && selC.length!==App.allCompanies.length;
+
+    // ── ステップ1: 月・グループ・会社フィルタ ──
+    // P0-3: PC稼働にも会社フィルタを適用
+    App.pc_f = App.pc.filter(r => {
+      if (!selM.includes(r['月'])) return false;
+      if (!selG.includes(r['所属グループ名'])) return false;
+      if (companyFilter) {
+        // 所属会社が判明しているデータのみ絞り込む（不明は混入させない）
+        if (DC.isNil(r['台帳_会社名'])) return false;
+        if (!selC.includes(r['台帳_会社名'])) return false;
+      }
+      return true;
+    });
+    // 所属会社不明PC件数を別管理
+    App.pcUnknownCompanyCount = companyFilter
+      ? App.pc.filter(r => selM.includes(r['月']) && selG.includes(r['所属グループ名']) && DC.isNil(r['台帳_会社名'])).length
+      : 0;
+
+    App.ac_f = App.ac.filter(r => selM.includes(r['月']));
+    if (companyFilter) {
+      App.ac_f = App.ac_f.filter(r => selC.includes(r['台帳_会社名']) || DC.isNil(r['台帳_会社名']));
     }
-    App.hw_f=selC.length?App.hw.filter(r=>selC.includes(r['会社名'])):App.hw.slice();
+    App.hw_f = selC.length ? App.hw.filter(r => selC.includes(r['会社名'])) : App.hw.slice();
     DC.recomputePcFlags(App.pc_f, App.cfg);
 
-    App.months=selM.slice().sort(); App.monthsJp=App.months.map(m=>DC.fmtMonth(m));
-    App.kpis=DC.calcGovernanceKpis(App.pc_f, App.ac_f, App.hw_f);
-    // 野良AI除外対象ユーザーの所属部署を、Webガバナンスの集計・グラフからだけ除外（リアルタイム連動）
-    const exDepts=new Set(App.aiExcludeDepts||[]);
-    App.ac_web_f = exDepts.size ? App.ac_f.filter(r=>!exDepts.has(r['台帳_部署名'])) : App.ac_f;
-    Object.assign(App.kpis, DC.computeWebGovernance(App.ac_web_f));
-
-    // 除外ユーザーのlogin_idセットを構築
+    // ── ステップ2: 除外ユーザー適用 ──
+    // P0-1: AI除外は「ユーザー × AI・外部サービスカテゴリのみ」に変更
+    // aiExcludeDepts はWebガバナンス除外に使用しない
     const exUserSet = new Set(
       (App.aiExcludeUsers || []).map(x => String(x).trim().toLowerCase()).filter(Boolean)
     );
-    // PC稼働からも除外ユーザーを除く（深夜・休日・長時間稼働の集計対象から外す）
+    // Web: AI・外部サービスカテゴリのみ除外ユーザーを除く（他カテゴリは通常集計）
+    App.ac_web_f = App.ac_f.map(r => {
+      if (!r['Webアクセス']) return r; // Web以外はそのまま
+      if (r['リスク分類'] !== 'AI・外部サービス') return r; // AIカテゴリ以外はそのまま
+      if (!exUserSet.size) return r;
+      const lid = r.login_id != null ? String(r.login_id).trim().toLowerCase() : '';
+      if (lid && exUserSet.has(lid)) return null; // 除外ユーザーのAIアクセスのみ除外
+      return r;
+    }).filter(Boolean);
+    App.ac_web_analysis = App.ac_web_f; // P0-4: 統一参照名
+
+    // PC: 除外ユーザーを適用（全カテゴリ）
     App.pc_f_ex = exUserSet.size
       ? App.pc_f.filter(r => {
           const lid = r['台帳_login_id'] != null
@@ -213,14 +242,32 @@
           return !lid || !exUserSet.has(lid);
         })
       : App.pc_f;
-    App.monthlyKpis=[];
-    for(const m of App.months){ const pcm=App.pc_f.filter(r=>r['月']===m), acm=App.ac_f.filter(r=>r['月']===m);
-      if(pcm.length===0 && acm.length===0) continue;
-      const km=DC.calcGovernanceKpis(pcm, acm, App.hw_f); km['月']=m; km['月_表示']=DC.fmtMonth(m); App.monthlyKpis.push(km); }
+    App.pc_analysis = App.pc_f_ex; // P0-4: 統一参照名
+
+    // ── ステップ3: KPI計算（pc_analysis・ac_web_analysis を使用） ──
+    App.months = selM.slice().sort();
+    App.monthsJp = App.months.map(m => DC.fmtMonth(m));
+    App.kpis = DC.calcGovernanceKpis(App.pc_analysis, App.ac_f, App.hw_f);
+    Object.assign(App.kpis, DC.computeWebGovernance(App.ac_web_analysis));
+
+    // ── ステップ4: 月次KPI（同一フィルタ・除外条件で計算） ──
+    // P1-4: 画面表示と同じ条件で月次KPIを算出
+    App.monthlyKpis = [];
+    for (const m of App.months) {
+      const pcm = App.pc_analysis.filter(r => r['月'] === m);
+      const acm = App.ac_f.filter(r => r['月'] === m);
+      const acwm = App.ac_web_analysis.filter(r => r['月'] === m);
+      if (pcm.length === 0 && acm.length === 0) continue;
+      const km = DC.calcGovernanceKpis(pcm, acm, App.hw_f);
+      Object.assign(km, DC.computeWebGovernance(acwm));
+      km['月'] = m; km['月_表示'] = DC.fmtMonth(m);
+      App.monthlyKpis.push(km);
+    }
+
     App.outCompanies = selC.length
-      ? [...new Set(App.ac_f.map(r=>r['台帳_会社名']).filter(Boolean))].sort()
-      : [...new Set(App.hw.map(r=>r['会社名']).filter(Boolean))].sort();
-    if(!App.outCompanies.length) App.outCompanies=App.allCompanies.slice();
+      ? [...new Set(App.ac_f.map(r => r['台帳_会社名']).filter(Boolean))].sort()
+      : [...new Set(App.hw.map(r => r['会社名']).filter(Boolean))].sort();
+    if (!App.outCompanies.length) App.outCompanies = App.allCompanies.slice();
 
     global.Render.renderAll();
     // 注：#f-aiexclude は index.html 側の静的な要素で t1〜t7 の外にあり、

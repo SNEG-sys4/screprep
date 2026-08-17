@@ -1,3 +1,636 @@
+# screprep コードレビュー用ファイル集
+# 生成日時: 2026-08-17 11:43 JST
+# 対象: data-core.js / main.js / exports.js
+# 特記: aiExcludeDepts・aiExcludeUsers・pc_f_ex の除外ロジック、KPI算出ロジックを含む
+
+==================================================================
+FILE: data-core.js  (368 lines)
+==================================================================
+/* ============================================================
+ * data-core.js  ―  ITガバナンスレポート データ処理コア
+ * Streamlit(app.py) の pandas 処理をブラウザJSへ忠実移植した純粋関数群。
+ * Node(テスト) / ブラウザ(本番) 両対応。DOM非依存。
+ * ============================================================ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.DataCore = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ── ガバナンス定数（app.py と同一） ──────────────────
+  const SITE_GOVERNANCE = {
+    '転送サービス':      { label:'転送サービス', risk:3, color:'#DC2626',
+      reason:'外部ファイル転送による情報漏洩リスク',
+      domains:['gigafile.nu','datadeliver.net','firestorage.jp','filesend.jp'] },
+    'クラウドストレージ': { label:'クラウドストレージ', risk:3, color:'#EA580C',
+      reason:'シャドウIT・データ持ち出しリスク',
+      domains:['drive.google.com','onedrive.live.com','dropbox.com','box.com'] },
+    'SNS':               { label:'SNS', risk:2, color:'#D97706',
+      reason:'情報漏洩・風評リスク（投稿行為の可能性）',
+      domains:['twitter.com','x.com','instagram.com','threads.net','facebook.com','tiktok.com'] },
+    'AI・外部サービス':  { label:'AI・外部サービス', risk:2, color:'#7C3AED',
+      reason:'機密情報の外部AIへの入力リスク',
+      domains:['chatgpt.com','copilot.microsoft.com','notebooklm.google','gemini.google.com'] },
+    '動画・娯楽':        { label:'動画・娯楽', risk:1, color:'#2563EB',
+      reason:'業務時間中の生産性への影響',
+      domains:['youtube.com','youtu.be','nicovideo.jp'] },
+    'ショッピング':       { label:'ショッピング', risk:1, color:'#059669',
+      reason:'業務時間中の私的利用',
+      domains:['amazon.co.jp','rakuten.co.jp','zozo.jp','shopping.yahoo.co.jp'] },
+    'その他Web':         { label:'その他Web', risk:0, color:'#94A3B8',
+      reason:'一般Webアクセス（業務関連含む）', domains:[] },
+  };
+
+  const THRESHOLDS = {
+    risk_interception_rate: { green:95, yellow:85 },
+    governance_score:       { green:75, yellow:60 },
+    workload_concentration: { green:1.5, yellow:2.0 },
+    latenight_rate:         { green:2, yellow:5 },
+  };
+
+  const DEFAULTS = {
+    LATE_NIGHT_START: 22,
+    EARLY_MORNING_END: 6,
+    OVERTIME_THRESHOLD: 20,
+  };
+
+  const BASE_CLR = ['#2563EB','#059669','#D97706','#DC2626','#7C3AED','#EA580C','#0891B2','#BE185D'];
+  const STATUS_COLORS = { green:'#059669', yellow:'#D97706', red:'#DC2626' };
+  const STATUS_LABELS = { green:'🟢 良好', yellow:'🟡 要注意', red:'🔴 対応が必要です' };
+
+  // ── ヘルパ ────────────────────────────────────────
+  function isNil(v){ return v === null || v === undefined || v === '' || (typeof v==='number' && isNaN(v)); }
+
+  function classifyUrl(url) {
+    if (isNil(url)) return 'その他Web';
+    const u = String(url).toLowerCase();
+    let domain = u;
+    try { domain = new URL(u).host; } catch (e) { domain = u; }
+    for (const cat in SITE_GOVERNANCE) {
+      for (const d of SITE_GOVERNANCE[cat].domains) {
+        if (domain.indexOf(d) !== -1) return cat;
+      }
+    }
+    return u.indexOf('http') === 0 ? 'その他Web' : null;
+  }
+
+  function fmtMonth(p) {
+    try {
+      const [y, m] = String(p).split('-');
+      return `${y}年${parseInt(m,10)}月`;
+    } catch (e) { return String(p); }
+  }
+
+  function getStatus(value, metric, higherIsBetter) {
+    if (higherIsBetter === undefined) higherIsBetter = true;
+    const th = THRESHOLDS[metric] || { green:80, yellow:60 };
+    if (higherIsBetter) {
+      if (value >= th.green) return 'green';
+      if (value >= th.yellow) return 'yellow';
+      return 'red';
+    } else {
+      if (value <= th.green) return 'green';
+      if (value <= th.yellow) return 'yellow';
+      return 'red';
+    }
+  }
+
+  // "2026/06/01（月）" → Date（括弧内曜日を除去して解析）
+  function parsePcDate(s) {
+    if (isNil(s)) return null;
+    const cleaned = String(s).replace(/[（(][^)）]*[）)]/g, '').trim();
+    const m = cleaned.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    if (!m) return null;
+    return new Date(+m[1], +m[2]-1, +m[3]);
+  }
+
+  function hmToMinutes(s) {
+    if (isNil(s)) return null;
+    const parts = String(s).split(':');
+    if (parts.length < 2) return null;
+    const h = parseInt(parts[0],10), mi = parseInt(parts[1],10);
+    if (isNaN(h) || isNaN(mi)) return null;
+    return h*60 + mi;
+  }
+
+  // Date + "HH:MM[:SS]" → Date（時刻付き）
+  function combineDateTime(d, t) {
+    if (!d || isNil(t)) return null;
+    const parts = String(t).split(':');
+    const h = parseInt(parts[0],10), mi = parseInt(parts[1]||'0',10), se = parseInt(parts[2]||'0',10);
+    if (isNaN(h) || isNaN(mi)) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, se||0);
+  }
+
+  function ymKey(d) {
+    if (!d || isNaN(d.getTime())) return null;
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+
+  function parseDateLoose(s) {
+    if (isNil(s)) return null;
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function num(v) {
+    if (isNil(v)) return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[, ]/g,''));
+    return isNaN(n) ? null : n;
+  }
+
+  function strip(v){ return isNil(v) ? '' : String(v).trim(); }
+
+  // ── 台帳ロード ────────────────────────────────────
+  // rows: 配列(オブジェクト)。列見出しに数字キー('59','68','69','70')を含む想定。
+  function loadHw(rows) {
+    return rows.map(r0 => {
+      const r = Object.assign({}, r0);
+      for (const c of ['purchase_date','depreciation_date','inst_date']) {
+        if (c in r) r[c] = parseDateLoose(r[c]);
+      }
+      if ('inst_price' in r) r.inst_price = num(r.inst_price);
+      // 数字列 → 名称列
+      if ('68' in r) r['会社名'] = r['68'];
+      if ('69' in r) r['部署名'] = r['69'];
+      if ('70' in r) r['課名']   = r['70'];
+      if ('59' in r) r['login_id'] = r['59'];
+      const parts = [strip(r['会社名'])];
+      if (!isNil(r['部署名'])) parts.push(strip(r['部署名']));
+      if (!isNil(r['課名']))   parts.push(strip(r['課名']));
+      r['組織'] = parts.filter(x => x && x !== 'nan').join(' ');
+      if (!isNil(r.login_id)) {
+        let lid = String(r.login_id).trim().toLowerCase();
+        r.login_id = (lid === 'nan' || lid === '') ? null : lid;
+      } else r.login_id = null;
+      return r;
+    });
+  }
+
+  // ── PC稼働ログロード ──────────────────────────────
+  function loadPc(rows, cfg) {
+    cfg = Object.assign({}, DEFAULTS, cfg);
+    return rows.map(r0 => {
+      const r = Object.assign({}, r0);
+      const d = parsePcDate(r['日付']);
+      r['日付_dt'] = d;
+      r['月'] = ymKey(d);
+      r['月_表示'] = r['月'] ? fmtMonth(r['月']) : null;
+      r['曜日'] = d ? ((d.getDay()+6)%7) : null; // 0=月..6=日
+      r['休日'] = r['曜日'] !== null ? r['曜日'] >= 5 : false;
+      r['開始時刻'] = combineDateTime(d, r['初回ログ時刻']);
+      r['終了時刻'] = combineDateTime(d, r['最終ログ時刻']);
+      r['ログ時間_分'] = hmToMinutes(r['ログ時間']);
+      const endH = r['終了時刻'] ? r['終了時刻'].getHours() : null;
+      const startH = r['開始時刻'] ? r['開始時刻'].getHours() : null;
+      r['深夜稼働'] = (endH !== null && endH >= cfg.LATE_NIGHT_START) ||
+                      (startH !== null && startH < cfg.EARLY_MORNING_END);
+      r['時間外稼働'] = (endH !== null && endH >= cfg.OVERTIME_THRESHOLD);
+      return r;
+    });
+  }
+
+  // フィルタ後の再計算（app.py 278-279 行：終了時刻のみで判定）
+  function recomputePcFlags(rows, cfg) {
+    cfg = Object.assign({}, DEFAULTS, cfg);
+    for (const r of rows) {
+      const endH = r['終了時刻'] ? r['終了時刻'].getHours() : null;
+      r['時間外稼働'] = (endH !== null && endH >= cfg.OVERTIME_THRESHOLD);
+      r['深夜稼働']   = (endH !== null && endH >= cfg.LATE_NIGHT_START);
+    }
+    return rows;
+  }
+
+  // ── アクセスログロード（複数ファイル結合） ─────────
+  function loadAc(fileRowsList) {
+    let all = [];
+    for (const rows of fileRowsList) {
+      for (const r0 of rows) {
+        const r = Object.assign({}, r0);
+        const d = parseDateLoose(r['日時']);
+        r['日時_dt'] = d;
+        r['月'] = ymKey(d);
+        r['月_表示'] = r['月'] ? fmtMonth(r['月']) : null;
+        r['時刻_時'] = d ? d.getHours() : null;
+        r['勤務時間内'] = r['時刻_時'] !== null && r['時刻_時'] >= 8 && r['時刻_時'] <= 19;
+        r['login_id'] = isNil(r['ログオン ユーザー名']) ? 'nan'
+                        : String(r['ログオン ユーザー名']).trim().toLowerCase();
+        const cat = classifyUrl(r['詳細 2']);
+        r['リスク分類'] = cat;
+        r['リスクレベル'] = cat && SITE_GOVERNANCE[cat] ? SITE_GOVERNANCE[cat].risk : 0;
+        const kind = strip(r['種類']);
+        r['Webアクセス'] = kind === 'Web アクセス監視';
+        r['デバイス操作'] = kind.indexOf('デバイス') !== -1;
+        r['アプリ監視'] = kind.indexOf('アプリケーション') !== -1;
+        all.push(r);
+      }
+    }
+    all.sort((a,b) => {
+      const ta = a['日時_dt'] ? a['日時_dt'].getTime() : 0;
+      const tb = b['日時_dt'] ? b['日時_dt'].getTime() : 0;
+      return ta - tb;
+    });
+    return all;
+  }
+
+  // ── 台帳結合 ─────────────────────────────────────
+  function joinLedgers(hw, pc, ac) {
+    // login_id → 台帳情報
+    const byLogin = {};
+    for (const r of hw) {
+      if (!isNil(r.login_id) && !(r.login_id in byLogin)) {
+        byLogin[r.login_id] = r;
+      }
+    }
+    for (const r of ac) {
+      const h = byLogin[r.login_id];
+      r['台帳_氏名']   = h ? h.user_name : null;
+      r['台帳_端末名'] = h ? h.machine_name : null;
+      r['台帳_会社名'] = h ? h['会社名'] : null;
+      r['台帳_部署名'] = h ? h['部署名'] : null;
+      r['台帳_課名']   = h ? h['課名'] : null;
+      r['台帳_組織']   = h ? h['組織'] : null;
+    }
+    // machine_name → 台帳情報
+    const byMachine = {};
+    for (const r of hw) {
+      if (!isNil(r.machine_name) && !(r.machine_name in byMachine)) {
+        byMachine[r.machine_name] = r;
+      }
+    }
+    for (const r of pc) {
+      const h = byMachine[r['端末エージェント名']];
+      r['台帳_氏名']     = h ? h.user_name : null;
+      r['台帳_login_id'] = h ? h.login_id : null;
+      r['台帳_会社名']   = h ? h['会社名'] : null;
+      r['台帳_部署名']   = h ? h['部署名'] : null;
+      r['台帳_課名']     = h ? h['課名'] : null;
+      r['台帳_組織']     = h ? h['組織'] : null;
+    }
+    return { hw, pc, ac };
+  }
+
+  // ── 集計ユーティリティ ────────────────────────────
+  function groupBy(rows, keyFn) {
+    const m = new Map();
+    for (const r of rows) {
+      const k = keyFn(r);
+      if (k === null || k === undefined) continue;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(r);
+    }
+    return m;
+  }
+  function mean(arr){ const v = arr.filter(x=>x!==null&&!isNaN(x)); return v.length? v.reduce((a,b)=>a+b,0)/v.length : 0; }
+  function sum(arr){ return arr.reduce((a,b)=>a+(b||0),0); }
+  function uniqueCount(rows, keyFn){ const s = new Set(); for(const r of rows){ const k=keyFn(r); if(!isNil(k)) s.add(k);} return s.size; }
+  function round(v, n){ const f = Math.pow(10,n||0); return Math.round(v*f)/f; }
+
+  // ── ②Webガバナンス健全度（部署除外を適用したacを渡せば、その除外を反映した集計を返す） ──
+  function computeWebGovernance(ac) {
+    const kpis = {};
+    const web = ac.filter(r => r['Webアクセス']);
+    if (web.length > 0) {
+      const totalWeb = web.length;
+      const riskWeighted = sum(web.map(r => r['リスクレベル']));
+      const maxPossible = totalWeb * 3;
+      const density = maxPossible > 0 ? riskWeighted / maxPossible : 0;
+      kpis.governance_score = round((1 - density) * 100, 1);
+      const catCounts = {};
+      for (const r of web) { if (!isNil(r['リスク分類'])) catCounts[r['リスク分類']] = (catCounts[r['リスク分類']]||0)+1; }
+      kpis.cat_counts = catCounts;
+      kpis.total_web = totalWeb;
+      kpis.high_risk_count = web.filter(r => r['リスクレベル']===3).length;
+      kpis.medium_risk_count = web.filter(r => r['リスクレベル']===2).length;
+      kpis.sns_count = catCounts['SNS']||0;
+      kpis.ai_count = catCounts['AI・外部サービス']||0;
+    } else {
+      kpis.governance_score = 100.0; kpis.cat_counts = {}; kpis.total_web = 0;
+      kpis.high_risk_count = 0; kpis.medium_risk_count = 0; kpis.sns_count = 0; kpis.ai_count = 0;
+    }
+    return kpis;
+  }
+
+  // ── KPI計算エンジン（app.py calc_governance_kpis 忠実移植） ──
+  function calcGovernanceKpis(pc, ac, hw) {
+    const kpis = {};
+
+    // ① リスク遮断完遂率
+    const blockEvents = ac.filter(r => /監視|遮断|禁止/.test(strip(r['種類'])));
+    const hasBlockCol = ac.some(r => '防止・禁止' in r);
+    const highRiskEvents = hasBlockCol ? ac.filter(r => !isNil(r['防止・禁止'])) : [];
+    const totalRiskEvents = blockEvents.length;
+    const blockedCount = highRiskEvents.length > 0 ? highRiskEvents.length : totalRiskEvents;
+    const interceptionRate = totalRiskEvents > 0
+      ? Math.min(100, blockedCount / totalRiskEvents * 100) : 100;
+    kpis.interception_rate = round(interceptionRate, 1);
+    kpis.total_risk_events = totalRiskEvents;
+    kpis.blocked_count = blockedCount;
+
+    // ② ガバナンス健全度
+    Object.assign(kpis, computeWebGovernance(ac));
+
+    // ③ 業務偏重指数
+    const deptGroups = groupBy(pc.filter(r=>!isNil(r['台帳_部署名'])), r=>r['台帳_部署名']);
+    const deptAvg = [];
+    deptGroups.forEach((rows, dept) => { deptAvg.push([dept, mean(rows.map(r=>r['ログ時間_分']))]); });
+    if (deptAvg.length >= 2) {
+      const overallAvg = mean(deptAvg.map(d=>d[1]));
+      let maxDept = deptAvg[0][0], maxVal = deptAvg[0][1];
+      for (const [d,v] of deptAvg) if (v > maxVal) { maxVal=v; maxDept=d; }
+      kpis.workload_concentration = overallAvg > 0 ? round(maxVal/overallAvg, 2) : 1.0;
+      kpis.busiest_dept = maxDept;
+      kpis.busiest_hours = round(maxVal/60, 1);
+      kpis.avg_hours = round(overallAvg/60, 1);
+    } else {
+      kpis.workload_concentration = 1.0; kpis.busiest_dept = '-'; kpis.busiest_hours = 0; kpis.avg_hours = 0;
+    }
+
+    // ④ 深夜稼働率
+    const totalDays = pc.length;
+    const latenightDays = pc.filter(r=>r['深夜稼働']).length;
+    kpis.latenight_rate = totalDays > 0 ? round(latenightDays/totalDays*100, 1) : 0;
+    kpis.latenight_days = latenightDays;
+    kpis.holiday_active = pc.filter(r=>r['休日']).length;
+
+    // ⑤ IT資産健全性
+    const totalDevices = hw.length;
+    const now = new Date();
+    let expired = 0, hasDep = false;
+    for (const r of hw) { if (!isNil(r.depreciation_date)) { hasDep = true; if (r.depreciation_date < now) expired++; } }
+    if (!hasDep) expired = 0;
+    kpis.asset_health = totalDevices > 0 ? round((1 - expired/totalDevices)*100, 1) : 100.0;
+    kpis.expired_devices = expired;
+    kpis.total_devices = totalDevices;
+
+    return kpis;
+  }
+
+  return {
+    SITE_GOVERNANCE, THRESHOLDS, DEFAULTS, BASE_CLR, STATUS_COLORS, STATUS_LABELS,
+    isNil, classifyUrl, fmtMonth, getStatus, parsePcDate, hmToMinutes, combineDateTime,
+    ymKey, parseDateLoose, num, strip,
+    loadHw, loadPc, recomputePcFlags, loadAc, joinLedgers,
+    groupBy, mean, sum, uniqueCount, round, calcGovernanceKpis, computeWebGovernance,
+  };
+});
+
+==================================================================
+FILE: main.js  (249 lines)
+==================================================================
+/* ============================================================
+ * main.js ― 状態管理・ファイル読込・永続化・フィルタ・タブ制御
+ * ============================================================ */
+(function (global) {
+  'use strict';
+  const DC=global.DataCore, DB=global.DB;
+  const App = global.App = Object.assign(global.App || {}, {
+    files:{hw:null,pc:null,ac:[]},
+    hw:[],pc:[],ac:[], hw_f:[],pc_f:[],ac_f:[], kpis:{}, monthlyKpis:[],
+    months:[], monthsJp:[], outCompanies:[],
+    cfg:{LATE_NIGHT_START:22, EARLY_MORNING_END:6, OVERTIME_THRESHOLD:20}, longThreshold:12,
+    allMonths:[], allCompanies:[], allGroups:[],
+    sel:{months:[],companies:[],groups:[]},
+    aiExcludeUsers:[], aiExcludeDepts:[],
+  });
+
+  // ── 汎用ダウンロード ──
+  function download(blob, name){ const url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},500); }
+  function todayStr(){ const d=new Date(); return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
+
+  // ── ファイル読込（生の行を返す） ──
+  function readCsvArrayBuffer(buf){
+    const bytes=new Uint8Array(buf); let text;
+    try { const uni=Encoding.convert(bytes,{to:'UNICODE',from:'AUTO'}); text=Encoding.codeToString(uni); }
+    catch(e){ text=new TextDecoder('utf-8').decode(bytes); }
+    if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+    return Papa.parse(text,{header:true,skipEmptyLines:true}).data;
+  }
+  async function readXlsx(buf){
+    const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
+    const ws=wb.worksheets[0]; const rows=[]; let headers=[];
+    ws.eachRow((row,rn)=>{ const vals=row.values;
+      if(rn===1){ headers=vals.map(v=>v==null?'':String(v).trim()); return; }
+      const o={}; for(let i=1;i<headers.length;i++){ const h=headers[i]; if(!h) continue;
+        let v=vals[i]; if(v && typeof v==='object' && 'text' in v) v=v.text; if(v && v.result!==undefined) v=v.result; o[h]=v==null?'':v; }
+      rows.push(o); });
+    return rows;
+  }
+  function readFile(file){ return new Promise((resolve,reject)=>{ const fr=new FileReader();
+    fr.onload=async()=>{ try{ if(file.name.toLowerCase().endsWith('.xlsx')) resolve(await readXlsx(fr.result)); else resolve(readCsvArrayBuffer(fr.result)); }catch(e){ reject(e); } };
+    fr.onerror=()=>reject(fr.error); fr.readAsArrayBuffer(file); }); }
+
+  // 月バケット化（保存の上書き単位）
+  function bucketPc(rows){ const o={}; for(const r of rows){ const m=DC.ymKey(DC.parsePcDate(r['日付']))||'不明'; (o[m]=o[m]||[]).push(r); } return o; }
+  function bucketAc(rows){ const o={}; for(const r of rows){ const m=DC.ymKey(DC.parseDateLoose(r['日時']))||'不明'; (o[m]=o[m]||[]).push(r); } return o; }
+
+  // ── アップロードUI ──
+  function setFn(box,txt){ document.getElementById('fn-'+box).textContent=txt||''; document.getElementById('box-'+box).classList.toggle('filled',!!txt); }
+  function checkReady(){ document.getElementById('btn-analyze').disabled=!(App.files.hw || App.files.pc || App.files.ac.length); }
+  document.getElementById('file-hw').addEventListener('change',e=>{ App.files.hw=e.target.files[0]||null; setFn('hw',App.files.hw&&App.files.hw.name); checkReady(); });
+  document.getElementById('file-pc').addEventListener('change',e=>{ App.files.pc=e.target.files[0]||null; setFn('pc',App.files.pc&&App.files.pc.name); checkReady(); });
+  document.getElementById('file-ac').addEventListener('change',e=>{ App.files.ac=[...e.target.files]; setFn('ac',App.files.ac.length?App.files.ac.length+'ファイル選択':''); checkReady(); });
+  document.getElementById('btn-analyze').addEventListener('click', importAndReload);
+
+  // ── 取り込み → 保存 → 再ロード ──
+  async function importAndReload(){
+    const st=document.getElementById('upload-status');
+    st.className='status-msg status-info'; st.innerHTML='<span class="spinner"></span>取り込んで保存しています…';
+    try{
+      if(App.files.hw){ const rows=await readFile(App.files.hw); await DB.putHw(rows); }
+      if(App.files.pc){ const byM=bucketPc(await readFile(App.files.pc)); for(const m in byM) await DB.putMonth('pc',m,byM[m]); }
+      if(App.files.ac.length){ let all=[]; for(const f of App.files.ac) all=all.concat(await readFile(f)); const byM=bucketAc(all); for(const m in byM) await DB.putMonth('ac',m,byM[m]); }
+      App.files={hw:null,pc:null,ac:[]}; ['hw','pc','ac'].forEach(b=>{ document.getElementById('file-'+b).value=''; setFn(b,''); }); checkReady();
+      const ok=await loadFromStore();
+      st.className='status-msg status-ok'; st.textContent = ok ? '✅ 取り込み・保存が完了しました。' : '⚠️ 取り込めるデータがありませんでした。';
+    }catch(e){ console.error(e); st.className='status-msg status-err'; st.textContent='取り込みエラー：'+e.message+'（列名・文字コードをご確認ください）'; }
+  }
+
+  // ── 保管データからロード（全期間） ──
+  async function loadFromStore(){
+    const [hwRec,pcRecs,acRecs]=await Promise.all([DB.getAll('hw'),DB.getAll('pc'),DB.getAll('ac')]);
+    const hwRows=hwRec.length?hwRec[0].rows:[];
+    const pcRows=[].concat(...pcRecs.map(r=>r.rows||[]));
+    const acRows=[].concat(...acRecs.map(r=>r.rows||[]));
+    updateStorePanel(hwRec,pcRecs,acRecs);
+    if(!hwRows.length && !pcRows.length && !acRows.length){ document.getElementById('app-body').classList.add('hidden'); return false; }
+
+    App.hw=DC.loadHw(hwRows);
+    App.pc=DC.loadPc(pcRows, App.cfg);
+    App.ac=DC.loadAc(acRows.length?[acRows]:[]);
+    DC.joinLedgers(App.hw, App.pc, App.ac);
+
+    App.allMonths=[...new Set([...App.pc.map(r=>r['月']),...App.ac.map(r=>r['月'])].filter(Boolean))].sort();
+    App.allCompanies=[...new Set(App.hw.map(r=>r['会社名']).filter(Boolean))].sort();
+    App.allGroups=[...new Set(App.pc.map(r=>r['所属グループ名']).filter(Boolean))].sort();
+    App.sel.months=App.allMonths.slice(); App.sel.companies=App.allCompanies.slice(); App.sel.groups=App.allGroups.slice();
+
+    buildFilterUI();
+    applyFilters();
+    document.getElementById('app-body').classList.remove('hidden');
+    return true;
+  }
+
+  // ── 保管状況パネル ──
+  function updateStorePanel(hwRec,pcRecs,acRecs){
+    const el=document.getElementById('store-status'); if(!el) return;
+    const pcMonths=pcRecs.map(r=>r.month).sort();
+    const acMonths=acRecs.map(r=>r.month).sort();
+    const pcN=pcRecs.reduce((a,r)=>a+(r.rows?r.rows.length:0),0);
+    const acN=acRecs.reduce((a,r)=>a+(r.rows?r.rows.length:0),0);
+    const hwN=hwRec.length?(hwRec[0].rows?hwRec[0].rows.length:0):0;
+    if(!hwN && !pcN && !acN){ el.className='status-msg status-info'; el.innerHTML='💾 保管データ：まだありません。ファイルを取り込むとブラウザ内に蓄積されます。'; return; }
+    const fmtMs=pcMonths.map(m=>DC.fmtMonth(m)).join('、')||'—';
+    const fmtAs=acMonths.map(m=>DC.fmtMonth(m)).join('、')||'—';
+    el.className='status-msg status-ok';
+    el.innerHTML='💾 <b>保管データ（このブラウザ内に蓄積中）</b><br>台帳：'+hwN+'件　／　PC稼働：'+pcN.toLocaleString()+'件（'+pcMonths.length+'ヶ月：'+fmtMs+'）　／　アクセス：'+acN.toLocaleString()+'件（'+acMonths.length+'ヶ月：'+fmtAs+'）';
+  }
+
+  // ── バックアップ書出し／復元／全消去 ──
+  document.getElementById('btn-backup').addEventListener('click', async()=>{
+    try{ const data=await DB.exportAll(); download(new Blob([JSON.stringify(data)],{type:'application/json'}), 'ITガバナンス_バックアップ_'+todayStr()+'.json'); }
+    catch(e){ alert('書出しエラー：'+e.message); }
+  });
+  document.getElementById('file-backup').addEventListener('change', async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    if(!confirm('現在の保管データをバックアップの内容で置き換えます。よろしいですか？')){ e.target.value=''; return; }
+    const st=document.getElementById('upload-status'); st.className='status-msg status-info'; st.innerHTML='<span class="spinner"></span>復元しています…';
+    try{ const data=JSON.parse(await f.text()); await DB.importAll(data); await loadFromStore();
+      st.className='status-msg status-ok'; st.textContent='✅ バックアップから復元しました。'; }
+    catch(err){ console.error(err); st.className='status-msg status-err'; st.textContent='復元エラー：'+err.message; }
+    e.target.value='';
+  });
+  document.getElementById('btn-clear').addEventListener('click', async()=>{
+    if(!confirm('保管データをすべて消去します。元に戻せません（バックアップ済みならそこから復元可能）。実行しますか？')) return;
+    try{ await DB.clearAll(); await loadFromStore();
+      const st=document.getElementById('upload-status'); st.className='status-msg status-info'; st.textContent='🗑️ 保管データを消去しました。'; }
+    catch(e){ alert('消去エラー：'+e.message); }
+  });
+
+  // ── フィルタUI ──
+  function multiUI(elId, items, selected, labelFn, onChange){
+    const el=document.getElementById(elId); el.innerHTML='';
+    items.forEach(it=>{ const d=document.createElement('div');
+      const label=labelFn?labelFn(it):(DC.isNil(it)?'(空白)':it);
+      d.innerHTML='<label><input type="checkbox" '+(selected.includes(it)?'checked':'')+'> '+label+'</label>';
+      d.querySelector('input').addEventListener('change',ev=>onChange(it,ev.target.checked)); el.appendChild(d); });
+  }
+  function buildFilterUI(){
+    multiUI('f-months', App.allMonths, App.sel.months, m=>DC.fmtMonth(m), (v,on)=>toggle(App.sel.months,v,on));
+    multiUI('f-companies', App.allCompanies, App.sel.companies, null, (v,on)=>toggle(App.sel.companies,v,on));
+    multiUI('f-groups', App.allGroups, App.sel.groups, null, (v,on)=>toggle(App.sel.groups,v,on));
+    const ot=document.getElementById('s-ot'), ln=document.getElementById('s-ln');
+    ot.oninput=()=>{ App.cfg.OVERTIME_THRESHOLD=+ot.value; document.getElementById('v-ot').textContent=ot.value; applyFilters(); };
+    ln.oninput=()=>{ App.cfg.LATE_NIGHT_START=+ln.value; document.getElementById('v-ln').textContent=ln.value; applyFilters(); };
+    buildAiExcludeUI();
+  }
+  // チェック状態→App.aiExcludeUsers／App.aiExcludeDepts を更新するだけ（再描画はしない＝初期構築用）
+  function _computeAiExcludeState(){
+    const ids=[]; document.querySelectorAll('#f-aiexclude input.ai-ex:checked').forEach(cb=>ids.push(cb.value));
+    App.aiExcludeUsers=ids;
+    try{ if(window.localStorage) localStorage.setItem('aiExcludeUsers', ids.join(',')); }catch(e){}
+    const byVal=App._userDeptByVal||{};
+    const depts=new Set();
+    ids.forEach(v=>{ const d=byVal[v]; if(d) depts.add(d); });
+    App.aiExcludeDepts=[...depts];
+  }
+  // チェック変更時：状態更新＋再計算・再描画（画面・レポートにリアルタイム反映。連続クリックはデバウンス）
+  function _syncAiExclude(){ _computeAiExcludeState(); clearTimeout(filterTimer); filterTimer=setTimeout(applyFilters,250); }
+  function buildAiExcludeUI(){
+    const el=document.getElementById('f-aiexclude'); if(!el) return;
+    const esc=(global.Render&&global.Render.esc)?global.Render.esc:(s=>String(s==null?'':s));
+    const ac=App.ac||[], hw=App.hw||[];
+    const aiRows=ac.filter(r=>r['Webアクセス'] && r['リスク分類']==='AI・外部サービス');
+    const cntId={}, cntNm={};
+    aiRows.forEach(r=>{ const id=r.login_id!=null?String(r.login_id).trim().toLowerCase():''; if(id&&id!=='nan')cntId[id]=(cntId[id]||0)+1; const nm=r['台帳_氏名']!=null?String(r['台帳_氏名']).trim():''; if(nm)cntNm[nm]=(cntNm[nm]||0)+1; });
+    const map={};
+    function addU(rawId,rawNm,rawDep){ let id=rawId!=null?String(rawId).trim().toLowerCase():''; if(id==='nan')id=''; const nm=rawNm!=null?String(rawNm).trim():''; const dep=rawDep!=null?String(rawDep).trim():''; if(!id&&!nm)return; const key=id||('n:'+nm); if(!map[key])map[key]={val:(id||nm),id:id,name:nm,dept:dep,n:(id?(cntId[id]||0):(cntNm[nm]||0))}; else{ if(!map[key].name&&nm)map[key].name=nm; if(!map[key].dept&&dep)map[key].dept=dep; } }
+    ac.forEach(r=>addU(r.login_id,r['台帳_氏名'],r['台帳_部署名']));
+    hw.forEach(h=>addU(h.login_id,h.user_name,h['部署名']));
+    const users=Object.values(map).sort((a,b)=> b.n-a.n || String(a.name||a.val).localeCompare(String(b.name||b.val),'ja'));
+    // チェック対象値 → 所属部署 の対応表（Webガバナンスからの部署連動除外に使用）
+    const byVal={}; users.forEach(u=>{ if(u.dept) byVal[u.val]=u.dept; });
+    App._userDeptByVal=byVal;
+    let set=new Set();
+    try{ const raw=(window.localStorage&&localStorage.getItem('aiExcludeUsers'))||''; set=new Set(raw.split(/[\n,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean)); }catch(e){}
+    el.innerHTML = users.length ? users.map(u=>`<div><label><input type="checkbox" class="ai-ex" value="${esc(u.val)}" ${set.has(String(u.val).toLowerCase())?'checked':''}> ${esc(u.name||u.id||'(不明)')}${(u.id&&u.name)?'（'+esc(u.id)+'）':''}${u.dept?' ['+esc(u.dept)+']':''} — AI ${u.n}件</label></div>`).join('') : '<div style="color:#64748b;font-size:.8rem">ユーザーがいません。</div>';
+    el.querySelectorAll('input.ai-ex').forEach(cb=>cb.addEventListener('change', _syncAiExclude));
+    _computeAiExcludeState();
+  }
+  let filterTimer=null;
+  function toggle(arr,v,on){ const i=arr.indexOf(v); if(on&&i<0)arr.push(v); if(!on&&i>=0)arr.splice(i,1);
+    clearTimeout(filterTimer); filterTimer=setTimeout(applyFilters,250); }
+
+  // ── フィルタ適用＋再計算＋描画 ──
+  function applyFilters(){
+    const selM=App.sel.months, selC=App.sel.companies, selG=App.sel.groups;
+    App.pc_f=App.pc.filter(r=>selM.includes(r['月']) && selG.includes(r['所属グループ名']));
+    App.ac_f=App.ac.filter(r=>selM.includes(r['月']));
+    if(selC.length && selC.length!==App.allCompanies.length){
+      App.ac_f=App.ac_f.filter(r=>selC.includes(r['台帳_会社名']) || DC.isNil(r['台帳_会社名']));
+    }
+    App.hw_f=selC.length?App.hw.filter(r=>selC.includes(r['会社名'])):App.hw.slice();
+    DC.recomputePcFlags(App.pc_f, App.cfg);
+
+    App.months=selM.slice().sort(); App.monthsJp=App.months.map(m=>DC.fmtMonth(m));
+    App.kpis=DC.calcGovernanceKpis(App.pc_f, App.ac_f, App.hw_f);
+    // 野良AI除外対象ユーザーの所属部署を、Webガバナンスの集計・グラフからだけ除外（リアルタイム連動）
+    const exDepts=new Set(App.aiExcludeDepts||[]);
+    App.ac_web_f = exDepts.size ? App.ac_f.filter(r=>!exDepts.has(r['台帳_部署名'])) : App.ac_f;
+    Object.assign(App.kpis, DC.computeWebGovernance(App.ac_web_f));
+
+    // 除外ユーザーのlogin_idセットを構築
+    const exUserSet = new Set(
+      (App.aiExcludeUsers || []).map(x => String(x).trim().toLowerCase()).filter(Boolean)
+    );
+    // PC稼働からも除外ユーザーを除く（深夜・休日・長時間稼働の集計対象から外す）
+    App.pc_f_ex = exUserSet.size
+      ? App.pc_f.filter(r => {
+          const lid = r['台帳_login_id'] != null
+            ? String(r['台帳_login_id']).trim().toLowerCase()
+            : null;
+          return !lid || !exUserSet.has(lid);
+        })
+      : App.pc_f;
+    App.monthlyKpis=[];
+    for(const m of App.months){ const pcm=App.pc_f.filter(r=>r['月']===m), acm=App.ac_f.filter(r=>r['月']===m);
+      if(pcm.length===0 && acm.length===0) continue;
+      const km=DC.calcGovernanceKpis(pcm, acm, App.hw_f); km['月']=m; km['月_表示']=DC.fmtMonth(m); App.monthlyKpis.push(km); }
+    App.outCompanies = selC.length
+      ? [...new Set(App.ac_f.map(r=>r['台帳_会社名']).filter(Boolean))].sort()
+      : [...new Set(App.hw.map(r=>r['会社名']).filter(Boolean))].sort();
+    if(!App.outCompanies.length) App.outCompanies=App.allCompanies.slice();
+
+    global.Render.renderAll();
+    // 注：#f-aiexclude は index.html 側の静的な要素で t1〜t7 の外にあり、
+    // renderAll()（#t1〜#t7 の再描画）では一切触れられない。よって
+    // buildAiExcludeUI() をここで再呼び出しする必要はない（チェックボックスの
+    // イベントリスナーは loadFromStore() 時に1回登録したまま維持される）。
+    // 以前ここで毎回 buildAiExcludeUI() を呼んでいたが、フィルタ変更のたびに
+    // 100件規模のチェックリストDOMを丸ごと作り直す無駄な処理だったため削除。
+  }
+
+  // ── タブ切替 ──
+  document.querySelectorAll('.tabnav button').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('.tabnav button').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tabpage').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); document.getElementById(b.dataset.tab).classList.add('active');
+    window.dispatchEvent(new Event('resize'));
+  }));
+
+  // ── レポート設定の表示/非表示 ──
+  (function(){ const t=document.getElementById('settings-toggle'), b=document.getElementById('settings-body'), c=document.getElementById('settings-caret');
+    if(t&&b) t.addEventListener('click',()=>{ const hidden=b.classList.toggle('hidden'); if(c) c.textContent=hidden?'［表示する ▼］':'［非表示にする ▲］'; }); })();
+
+  // ── 初期化：保管データがあれば自動表示 ──
+  DB.open().then(loadFromStore).catch(e=>{ const st=document.getElementById('store-status');
+    if(st){ st.className='status-msg status-err'; st.textContent='保存領域を開けませんでした：'+e.message; } });
+})(typeof self !== 'undefined' ? self : this);
+
+==================================================================
+FILE: exports.js  (573 lines)
+==================================================================
 /* ============================================================
  * exports.js ― TAB5(レポート出力: Word/HTML/Excel) + TAB6(リスク予測)
  * ============================================================ */
@@ -29,7 +662,7 @@
   }
   function dataUrlToU8(u){ const b=atob(u.split(',')[1]); const a=new Uint8Array(b.length); for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i); return a; }
 
-  // ── CSV出力（長時間稼働候補一覧） ──
+  // ── CSV出力（電源つけっぱ一覧） ──
   App._exportLongCsv = function(rows, cols, th){
     const head=cols.join(',');
     const body=rows.map(r=>cols.map(c=>{
@@ -51,10 +684,10 @@
     {id:'summary', icon:'🏛️', name:'1. エグゼクティブサマリー', opts:[['summary','KPIスコアカード + 総合評価',true]], cmt:'summary'},
     {id:'web_risk',icon:'🔒', name:'2. リスク遮断・Webガバナンス', opts:[['web_risk','INSIGHTカード',true],['web_graph','グラフ（カテゴリ別・月次）',true]], cmt:'web_risk'},
     {id:'pc_ops', icon:'⚡', name:'3. PC稼働・組織健全性', opts:[['pc_ops','KPI + INSIGHT',true],['pc_graph','グラフ（部署別稼働）',true],['pc_dept_table','部署別稼働サマリー表',false]], cmt:'pc_ops'},
-    {id:'power_on',icon:'🔌', name:'4. 長時間稼働候補検出', opts:[['power_on','リスク説明 + KPI',true],['power_graph','グラフ（端末別ランキング）',true],['power_table','長時間稼働一覧表',false]], cmt:'power_on'},
+    {id:'power_on',icon:'🔌', name:'4. 電源付きっぱなし検出', opts:[['power_on','リスク説明 + KPI',true],['power_graph','グラフ（端末別ランキング）',true],['power_table','長時間稼働一覧表',false]], cmt:'power_on'},
     {id:'assets', icon:'🖥️', name:'5. IT資産管理', opts:[['assets','KPI + INSIGHT',true],['assets_graph','グラフ（会社別台数）',true]], cmt:'assets'},
     {id:'action_plan',icon:'📋',name:'6. 次期アクションプラン', opts:[['action_plan','アクションプラン表',true]], cmt:'action_plan'},
-    {id:'focus', icon:'🔎', name:'7. 重点分析（問題の切り分け）', opts:[['focus','未承認AIアクセス/深夜・土日稼働/長時間稼働候補 の分析＋対策',true]], cmt:'focus'},
+    {id:'focus', icon:'🔎', name:'7. 重点分析（問題の切り分け）', opts:[['focus','野良AI/深夜休日/電源つけっぱ の分析＋対策',true]], cmt:'focus'},
     {id:'risk', icon:'🔮', name:'8. リスク予測・想定インパクト', opts:[['risk','金額換算＋脅威シナリオ',true]], cmt:'risk'},
   ];
 
@@ -128,12 +761,12 @@
         const suggestions = [];
         if(F.ai.shadow > 0){
           suggestions.push({ pri:'HIGH', cat:'Webガバナンス',
-            action:`未承認AIアクセス対策：許可AIの導入とガイドライン策定`,
+            action:`野良AI(${F.ai.shadow.toLocaleString()}件)対策：許可AIの導入とガイドライン策定`,
             deadline:'', owner:'システム課' });
         }
         if(F.power.n > 0){
           suggestions.push({ pri:'HIGH', cat:'PC稼働管理',
-            action:`長時間稼働候補の用途確認。不要な長時間稼働についてスリープ・シャットダウンポリシーを検討`,
+            action:`電源つけっぱ(${F.power.n}件/${F.power.terms}台)対策：自動シャットダウンポリシー適用`,
             deadline:'', owner:'システム課' });
         }
         if((App.kpis.expired_devices||0) > 0){
@@ -200,7 +833,7 @@
     return { k, ir, gs, wc, ln,
       irL:DC.getStatus(ir,'risk_interception_rate',true), gsL:DC.getStatus(gs,'governance_score',true),
       wcL:DC.getStatus(wc,'workload_concentration',false), lnL:DC.getStatus(ln,'latenight_rate',false),
-      web: (App.ac_web_analysis||App.ac_f).filter(r=>r['Webアクセス'] && !isNil(r['リスク分類'])),
+      web: (App.ac_web_f||App.ac_f).filter(r=>r['Webアクセス'] && !isNil(r['リスク分類'])),
       period: App.monthsJp.length?`${App.monthsJp[0]}～${App.monthsJp[App.monthsJp.length-1]}`:'全期間',
       now: (()=>{const d=new Date();return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';})(),
     };
@@ -208,7 +841,7 @@
 
   // ─── 重点分析（問題の切り分け）共通計算 ───
   function analyzeFocus(){
-    const k=App.kpis||{}, ac=App.ac_f||[], pc=App.pc_analysis||App.pc_f||[], th=App.longThreshold||12;
+    const k=App.kpis||{}, ac=App.ac_f||[], pc=App.pc_f||[], th=App.longThreshold||12;
     function dom(u){ try{ return new URL(String(u).toLowerCase()).host; }catch(e){ return ''; } }
     const exSet=new Set((App.aiExcludeUsers||[]).map(x=>String(x).trim().toLowerCase()).filter(Boolean));
     const aiEx=r=>{ if(!exSet.size) return false; const lid=r.login_id!=null?String(r.login_id).trim().toLowerCase():''; const nm=r['台帳_氏名']!=null?String(r['台帳_氏名']).trim().toLowerCase():''; return exSet.has(lid)||exSet.has(nm); };
@@ -271,7 +904,7 @@
       card(c.wcL,'③ 組織健全性：業務偏重指数',`最高稼働部署「${k.busiest_dept}」平均${k.busiest_hours}h ／ 全社平均${k.avg_hours}h`,c.wc,'倍',
         c.wcL!=='green'?`「${k.busiest_dept}」に業務が集中しています。長期的には離職リスクにつながりうるため把握が必要です。`:'部署間バランスは良好です。',
         c.wcL!=='green'?'人事・経営企画と情報共有し業務量配分を検討します。':'モニタリングを継続します。'),
-      card(c.lnL,'④ セキュリティリスク：深夜・休日稼働',`深夜稼働 ${fmtInt(k.latenight_days)}件（${c.ln}%）土日稼働 ${fmtInt(k.holiday_active)}件`,c.ln,'%',
+      card(c.lnL,'④ セキュリティリスク：深夜・休日稼働',`深夜稼働 ${fmtInt(k.latenight_days)}件（${c.ln}%）休日 ${fmtInt(k.holiday_active)}件`,c.ln,'%',
         c.lnL!=='green'?'管理者不在時間帯の稼働はインシデント対応遅延リスクと労務観点から実態把握が必要です。':'深夜・休日稼働は非常に少ない水準です。',
         c.lnL!=='green'?'深夜稼働の多い部署・端末を確認しヒアリングします。':'自動通知設定を維持し早期把握体制を継続します。'),
     ];
@@ -284,21 +917,21 @@
     const focusHtml=`<div class="pg"><h2>🔎 重点分析：問題の切り分けと対策</h2>
       <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:14px">
       <tr><th ${th5}>テーマ</th><th ${th5}>検出データ</th><th ${th5}>問題（データ基準）</th><th ${th5}>問題でない/経過観察</th><th ${th5}>対策</th></tr>
-      ${triRow('① 未承認AI利用疑い','未承認AIアクセス疑い '+fmtInt(F.ai.shadow)+'件（総'+fmtInt(F.ai.total)+'／除外'+fmtInt(F.ai.excluded)+'）/ '+F.ai.users+'名 / '+F.ai.depts+'部門','勤務時間外アクセス '+fmtInt(F.ai.off)+'件（業務利用か確認が必要）','AI正規利用登録で除外済','許可AI導入＋未確認アクセスはガイドライン周知')}
-      ${triRow('② 深夜・土日稼働','深夜 '+fmtInt(F.night.n)+'件（'+F.night.rate+'%）/ 休日 '+fmtInt(F.night.holidayN)+'件','特定端末・部署の継続的な深夜稼働','勤務形態差(管理G等)・顧問・土日稼働（土曜・日曜を集計）','該当端末の用途確認・自動通知・労務ヒアリング')}
-      ${triRow('③ 長時間稼働候補','長時間 '+fmtInt(F.power.n)+'件 / '+F.power.terms+'台 / 最長'+F.power.max+'h','長時間ログ状態（用途確認が必要）','サーバ兼用機・夜間バッチ・外出時の電源状態確認','自動シャットダウン/スリープ・離席ロック・除外登録')}
+      ${triRow('① 野良AI（無許可AI）','野良AI '+fmtInt(F.ai.shadow)+'件（総'+fmtInt(F.ai.total)+'／除外'+fmtInt(F.ai.excluded)+'）/ '+F.ai.users+'名 / '+F.ai.depts+'部門','勤務時間外 '+fmtInt(F.ai.off)+'件（私的利用の疑い）','正規PJの業務利用は除外ユーザー設定で控除済','許可AI導入＋他はブロック＋ガイドライン')}
+      ${triRow('② 深夜・休日稼働','深夜 '+fmtInt(F.night.n)+'件（'+F.night.rate+'%）/ 休日 '+fmtInt(F.night.holidayN)+'件','特定端末・部署の継続的な深夜稼働','勤務形態差(管理G等)・顧問・休日=日曜想定','該当端末の用途確認・自動通知・労務ヒアリング')}
+      ${triRow('③ 電源つけっぱなし','長時間 '+fmtInt(F.power.n)+'件 / '+F.power.terms+'台 / 最長'+F.power.max+'h','無人・常時接続（侵入/感染/対応遅延）','サーバ兼用機・夜間バッチ・外出時消し忘れ','自動シャットダウン/スリープ・離席ロック・除外登録')}
       </table>
-      ${card(F.ai.shadow>0?'yellow':'green','① 未承認AI利用疑い（未確認AIアクセス）','検出'+fmtInt(F.ai.total)+'件 − 正規利用(除外)'+fmtInt(F.ai.excluded)+'件',fmtInt(F.ai.shadow),'件','サービス別：'+aiSvcStr+'。利用者'+F.ai.users+'名・'+F.ai.depts+'部門。勤務時間外 '+fmtInt(F.ai.off)+'件は私的利用の疑い。正規プロジェクト利用者は「レポート設定」パネルのAI正規利用除外設定で控除しています。','会社が許可するAIを1つ導入し、それ以外の生成AIサイトはブロック。入力禁止情報を明記した利用ガイドラインを全社周知。')}
+      ${card(F.ai.shadow>0?'yellow':'green','① 野良AI（無許可AIサービス）','検出'+fmtInt(F.ai.total)+'件 − 正規利用(除外)'+fmtInt(F.ai.excluded)+'件',fmtInt(F.ai.shadow),'件','サービス別：'+aiSvcStr+'。利用者'+F.ai.users+'名・'+F.ai.depts+'部門。勤務時間外 '+fmtInt(F.ai.off)+'件は私的利用の疑い。正規プロジェクト利用者は「レポート設定」パネルの野良AI除外設定で控除しています。','会社が許可するAIを1つ導入し、それ以外の生成AIサイトはブロック。入力禁止情報を明記した利用ガイドラインを全社周知。')}
       ${F.ai.deptTop.length?smallTbl(['部署','AIアクセス件数'],F.ai.deptTop):''}
-      ${card(F.night.rate>=5?'red':F.night.rate>=2?'yellow':'green','② 深夜・土日稼働の問題点','',F.night.rate,'%','深夜稼働率は全体で'+F.night.rate+'%。全社では'+(F.night.rate<2?'問題は限定的':'注意が必要')+'だが、特定端末・部署への偏りは「管理者不在時間帯の稼働」として問題。勤務形態が異なる部署や顧問は業務上妥当なため下表と現場コメントで切り分け。','深夜稼働が多い上位を確認。真に問題な稼働はポリシー化、勤務形態差は対象外として記録し誤検知を低減。')}
+      ${card(F.night.rate>=5?'red':F.night.rate>=2?'yellow':'green','② 深夜・休日稼働の問題点','',F.night.rate,'%','深夜稼働率は全体で'+F.night.rate+'%。全社では'+(F.night.rate<2?'問題は限定的':'注意が必要')+'だが、特定端末・部署への偏りは「管理者不在時間帯の稼働」として問題。勤務形態が異なる部署や顧問は業務上妥当なため下表と現場コメントで切り分け。','深夜稼働が多い上位を確認。真に問題な稼働はポリシー化、勤務形態差は対象外として記録し誤検知を低減。')}
       ${F.night.deptTop.length?smallTbl(['深夜稼働が多い部署','件数'],F.night.deptTop):''}
-      ${card(F.power.n>0?'red':'green','③ 長時間稼働候補の対策案','',fmtInt(F.power.n),'件','PC稼働ログ上、初回から最終ログまでの時間幅が設定値を超えた端末を '+fmtInt(F.power.n)+'件・'+F.power.terms+'台（最長'+F.power.max+'h）検出しました。本指標のみでは連続通電・無人稼働を意味しないため、上位端末について用途確認が必要です。サーバ兼用機・夜間バッチは業務上の理由がある可能性があるため切り分けが必要。','（1）業務時間外の自動シャットダウン/スリープ（2）離席時の自動ロック（数分）を全社必須（3）サーバ兼用機は用途登録して対象外（4）検出上位端末の用途確認と電源状態確認の周知。')}
+      ${card(F.power.n>0?'red':'green','③ 電源付きっぱなしの対策案','',fmtInt(F.power.n),'件','長時間稼働 '+fmtInt(F.power.n)+'件・'+F.power.terms+'台（最長'+F.power.max+'h）。無人・常時接続は不正アクセスやマルウェア拡大の温床。サーバ兼用機・夜間バッチ・外出時の消し忘れは切り分けが必要。','（1）業務時間外の自動シャットダウン/スリープ（2）離席時の自動ロック（数分）を全社必須（3）サーバ兼用機は用途登録して対象外（4）検出上位端末の用途確認と消し忘れ周知。')}
       ${F.power.termTop.length?smallTbl(['長時間稼働が多い端末','件数'],F.power.termTop):''}
       </div>`;
     const scLv={high:'高',medium:'中',low:'低'}, scBg={high:'#FEE2E2',medium:'#FFFBEB',low:'#EFF6FF'}, scC={high:'#DC2626',medium:'#D97706',low:'#2563EB'};
     const bignum=(l,v,c2)=>`<div style="flex:1;min-width:180px;background:#fff;border:2px solid ${c2};border-radius:10px;padding:14px;text-align:center"><div style="font-size:.75rem;color:#64748b;font-weight:700">${l}</div><div style="font-size:1.6rem;font-weight:900;color:${c2}">${v}</div></div>`;
     const riskHtml=`<div class="pg"><h2>🔮 リスク予測・想定インパクト（放置した場合）</h2>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">${bignum('情報漏洩 期待損失',fmtInt(imp.expLoss)+'万円','#DC2626')}${bignum('長時間稼働候補 電気代',imp.elecYen.toLocaleString()+'円','#7C3AED')}${bignum('老朽デバイス 追加/年',fmtInt(imp.agingMan)+'万円','#D97706')}${bignum('想定インパクト合計/年',fmtInt(imp.totalMan)+'万円','#1E3A5F')}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">${bignum('情報漏洩 期待損失',fmtInt(imp.expLoss)+'万円','#DC2626')}${bignum('電源つけっぱ 電気代',imp.elecYen.toLocaleString()+'円','#7C3AED')}${bignum('老朽デバイス 追加/年',fmtInt(imp.agingMan)+'万円','#D97706')}${bignum('想定インパクト合計/年',fmtInt(imp.totalMan)+'万円','#1E3A5F')}</div>
       ${(tr.enough&&tr.alerts.length)?tr.alerts.map(a=>`<div style="background:#FEF2F2;border-left:5px solid #DC2626;border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:.85rem"><b style="color:#b91c1c">⚠️ ${a.label}が悪化傾向</b>：現在 ${a.cur}${a.unit} → 次月予測 <b>${a.pred}${a.unit}</b>（早期対応で悪化を防止可能）</div>`).join(''):''}
       <table style="width:100%;border-collapse:collapse;font-size:.8rem"><tr><th ${th5}>可能性</th><th ${th5}>シナリオ</th><th ${th5}>引き金</th><th ${th5}>想定被害／対策</th></tr>
       ${scs.map(s=>`<tr><td style="padding:7px;border-bottom:1px solid #eee;text-align:center;font-weight:800;color:${scC[s.level]};background:${scBg[s.level]}">${scLv[s.level]}</td><td style="padding:7px;border-bottom:1px solid #eee">${s.icon} ${s.title}</td><td style="padding:7px;border-bottom:1px solid #eee;font-size:.75rem">${s.trigger}</td><td style="padding:7px;border-bottom:1px solid #eee;font-size:.75rem">${s.story} <b>【対策】</b>${s.action}</td></tr>`).join('')}
@@ -390,12 +1023,12 @@
         highCats.length?`高リスクカテゴリ検出：${highCats.join('・')}。情報漏洩リスクが懸念されます。`:'高リスクアクセスは検出されていません。',
         '部門ごとの利用目的を確認し、必要に応じてホワイトリスト登録またはポリシー周知を実施してください。','高リスクアクセス',fmtInt(hr)+'件'));
       children.push(insightCard('🟡','SNS・生成AI（中リスクの内訳）',mr>0?'yellow':'green',
-        `中リスク計 ${fmtInt(mr)}件の内訳は SNS ${fmtInt(k.sns_count||0)}件・生成AI ${fmtInt(k.ai_count||0)}件。${(k.ai_count||0)>=(k.sns_count||0)?'生成AIへの機密情報入力リスクが主因':'SNSでの情報拡散・私的利用が主因'}とみられます。${(App.aiExcludeDepts||[]).length?'（AI正規利用除外が適用されています：登録ユーザーのAIアクセスを除外）':''}`,'多い方から対応：生成AIは許可ツール導入＋入力禁止情報のガイドライン、SNSは業務目的の確認と周知。','中リスク計',fmtInt(mr)+'件'));
+        `中リスク計 ${fmtInt(mr)}件の内訳は SNS ${fmtInt(k.sns_count||0)}件・生成AI ${fmtInt(k.ai_count||0)}件。${(k.ai_count||0)>=(k.sns_count||0)?'生成AIへの機密情報入力リスクが主因':'SNSでの情報拡散・私的利用が主因'}とみられます。${(App.aiExcludeDepts||[]).length?'（「レポート設定」の野良AI除外対象者が所属する部署「'+App.aiExcludeDepts.join('・')+'」は本集計から除外しています）':''}`,'多い方から対応：生成AIは許可ツール導入＋入力禁止情報のガイドライン、SNSは業務目的の確認と周知。','中リスク計',fmtInt(mr)+'件'));
       if(secs.web_graph){ children.push(await graph(CH.figCategoryBar(c.web),320)); children.push(await graph(CH.figMonthlyCategory(c.web,mj),320)); }
       maybeComment('web_risk_comment','web_risk'); }
 
     if(secs.pc_ops){ children.push(para(new PageBreak())); children.push(heading('3. PC稼働状況・組織健全性','2563EB')); children.push(para(run(' ')));
-      children.push(kpiRow([['業務偏重指数',c.wc+'倍',c.wcL],['深夜稼働率',c.ln+'%',c.lnL],['土日稼働件数',fmtInt(k.holiday_active)+'件',k.holiday_active===0?'green':'yellow']]));
+      children.push(kpiRow([['業務偏重指数',c.wc+'倍',c.wcL],['深夜稼働率',c.ln+'%',c.lnL],['休日稼働件数',fmtInt(k.holiday_active)+'件',k.holiday_active===0?'green':'yellow']]));
       children.push(para(run(' ')));
       children.push(insightCard('⚡','業務偏重（特定部署への負荷集中）',c.wcL,
         `最高稼働部署「${k.busiest_dept}」平均${k.busiest_hours}h / 全社平均${k.avg_hours}h（格差${c.wc}倍）`,'該当部署の管理職と面談し業務量再配分を評価してください。','業務偏重指数',c.wc+'倍'));
@@ -407,10 +1040,10 @@
         rows.sort((a,b)=>b[2]-a[2]); children.push(dfTable(['会社','部署','平均h','深夜','時間外','稼働日'],rows)); }
       maybeComment('pc_ops_comment','pc_ops'); }
 
-    if(secs.power_on){ children.push(para(new PageBreak())); children.push(heading('4. 長時間稼働候補（セキュリティ確認）','7C3AED')); children.push(para(run(' ')));
+    if(secs.power_on){ children.push(para(new PageBreak())); children.push(heading('4. 電源付きっぱなし検出（セキュリティリスク）','7C3AED')); children.push(para(run(' ')));
       const th=App.longThreshold, longRows=App.pc_f.filter(r=>(r['ログ時間_分']||0)>th*60);
       children.push(fullTable([ new TableRow({children:[ cell(para(run(
-        '⚠️ 長時間稼働候補のリスク：PC稼働ログ上、初回から最終ログまでの時間幅が設定値を超えた端末を抽出しています。本指標のみでは連続通電・無人稼働を意味しないため、上位端末について用途確認が必要です',{size:18})),{fill:'FEF2F2'}) ]}) ]));
+        '⚠️ 電源付きっぱなしのリスク：①不正アクセスの踏み台 ②マルウェア感染拡大 ③内部不正・のぞき見 ④インシデント対応遅延',{size:18})),{fill:'FEF2F2'}) ]}) ]));
       const maxH=longRows.length?Math.max.apply(null,longRows.map(r=>(r['ログ時間_分']||0)/60)):0;
       children.push(kpiRow([['長時間稼働検出',fmtInt(longRows.length)+'件',longRows.length>0?'red':'green'],
         ['対象端末数',new Set(longRows.map(r=>r['端末エージェント名'])).size+'台',longRows.length>0?'red':'green'],
@@ -454,28 +1087,28 @@
       const sHdr=new TableRow({children:['テーマ','検出データ','問題（データ基準）','問題でない/経過観察','主な対策'].map(t=>cell(para(run(t,{bold:true,size:15,color:WHITE})),{fill:NAVY}))});
       const trow=(t,d,pb,ok,ac2)=>new TableRow({children:[cell(para(run(t,{bold:true,size:14})),{fill:'FFFBEB',width:16}),cell(para(run(d,{size:13})),{width:20}),cell(para(run(pb,{size:13})),{width:24}),cell(para(run(ok,{size:13})),{width:20}),cell(para(run(ac2,{size:13})),{width:20})]});
       children.push(fullTable([sHdr,
-        trow('① 未承認AI利用疑い', '未承認AIアクセス疑い '+fmtInt(F.ai.shadow)+'件（総'+fmtInt(F.ai.total)+'／除外'+fmtInt(F.ai.excluded)+'）/ '+F.ai.users+'名 / '+F.ai.depts+'部門', '勤務時間外アクセス '+fmtInt(F.ai.off)+'件（業務利用か確認が必要）', 'AI正規利用登録で除外済', '許可AI導入＋未確認アクセスはガイドライン周知'),
-        trow('② 深夜・土日稼働', '深夜 '+fmtInt(F.night.n)+'件（'+F.night.rate+'%）/ 休日 '+fmtInt(F.night.holidayN)+'件', '特定端末・部署の継続的な深夜稼働', '勤務形態差(管理G等)・顧問・土日稼働（土曜・日曜を集計）', '該当端末の用途確認・自動通知・労務ヒアリング'),
-        trow('③ 長時間稼働候補', '長時間 '+fmtInt(F.power.n)+'件 / '+F.power.terms+'台 / 最長'+F.power.max+'h', '長時間ログ状態（用途確認が必要）', 'サーバ兼用機・夜間バッチ・外出時の電源状態確認', '自動シャットダウン/スリープ・離席ロック・除外登録')]));
+        trow('① 野良AI（無許可AI）', '野良AI '+fmtInt(F.ai.shadow)+'件（総'+fmtInt(F.ai.total)+'／除外'+fmtInt(F.ai.excluded)+'）/ '+F.ai.users+'名 / '+F.ai.depts+'部門', '勤務時間外 '+fmtInt(F.ai.off)+'件（私的利用の疑い）', '正規PJの業務利用は除外ユーザー設定で控除済', '許可AI導入＋他はブロック＋ガイドライン'),
+        trow('② 深夜・休日稼働', '深夜 '+fmtInt(F.night.n)+'件（'+F.night.rate+'%）/ 休日 '+fmtInt(F.night.holidayN)+'件', '特定端末・部署の継続的な深夜稼働', '勤務形態差(管理G等)・顧問・休日=日曜想定', '該当端末の用途確認・自動通知・労務ヒアリング'),
+        trow('③ 電源つけっぱなし', '長時間 '+fmtInt(F.power.n)+'件 / '+F.power.terms+'台 / 最長'+F.power.max+'h', '無人・常時接続（侵入/感染/対応遅延）', 'サーバ兼用機・夜間バッチ・外出時消し忘れ', '自動シャットダウン/スリープ・離席ロック・除外登録')]));
       children.push(para(run(' ')));
       const aiSvcStr=F.ai.svc.length?F.ai.svc.map(x=>x[0]+' '+x[1]+'件').join(' / '):'なし';
-      children.push(insightCard('🤖','① 未承認AI利用疑い（未確認AIアクセス）',F.ai.shadow>0?'yellow':'green',
-        'AI外部サービス検出 '+fmtInt(F.ai.total)+'件のうち正規利用として '+fmtInt(F.ai.excluded)+'件を除外 → 未承認AI利用疑い（除外後）'+fmtInt(F.ai.shadow)+'件（'+aiSvcStr+'）。利用者'+F.ai.users+'名・'+F.ai.depts+'部門。うち勤務時間外 '+fmtInt(F.ai.off)+'件は私的利用の疑い。※正規プロジェクト利用者は「レポート出力」タブの除外ユーザー設定で控除しています。',
-        '会社として許可するAIサービスを1つ導入し、それ以外の生成AIサイトはブロック。入力禁止情報（個人情報・契約・未公開情報）を明記した利用ガイドラインを全社周知。','未承認AI利用疑い件数',fmtInt(F.ai.shadow)+'件'));
+      children.push(insightCard('🤖','① 野良AI（無許可AIサービス）',F.ai.shadow>0?'yellow':'green',
+        'AI外部サービス検出 '+fmtInt(F.ai.total)+'件のうち正規利用として '+fmtInt(F.ai.excluded)+'件を除外 → 野良AI（無許可）'+fmtInt(F.ai.shadow)+'件（'+aiSvcStr+'）。利用者'+F.ai.users+'名・'+F.ai.depts+'部門。うち勤務時間外 '+fmtInt(F.ai.off)+'件は私的利用の疑い。※正規プロジェクト利用者は「レポート出力」タブの除外ユーザー設定で控除しています。',
+        '会社として許可するAIサービスを1つ導入し、それ以外の生成AIサイトはブロック。入力禁止情報（個人情報・契約・未公開情報）を明記した利用ガイドラインを全社周知。','野良AI件数',fmtInt(F.ai.shadow)+'件'));
       if(F.ai.deptTop.length) children.push(dfTable(['部署','AIアクセス件数'],F.ai.deptTop.map(d=>[d[0],fmtInt(d[1])])));
-      children.push(insightCard('🌙','② 深夜・土日稼働の問題点',F.night.rate>=5?'red':F.night.rate>=2?'yellow':'green',
+      children.push(insightCard('🌙','② 深夜・休日稼働の問題点',F.night.rate>=5?'red':F.night.rate>=2?'yellow':'green',
         '深夜稼働率は全体で'+F.night.rate+'%。全社では'+(F.night.rate<2?'問題は限定的':'注意が必要')+'だが、特定端末・部署への偏りは「管理者不在時間帯の稼働」として問題。勤務形態が異なる部署（管理G等）や顧問は業務上妥当なため、下表と現場コメントで切り分けます。',
         '深夜稼働が多い上位の用途を確認。真に問題な稼働はポリシー化（自動通知・時間外制限）、勤務形態差は「対象外」として記録し翌期以降の誤検知を低減。','深夜稼働率',F.night.rate+'%'));
       if(F.night.deptTop.length) children.push(dfTable(['深夜稼働が多い部署','件数'],F.night.deptTop.map(d=>[d[0],fmtInt(d[1])])));
-      children.push(insightCard('🔌','③ 長時間稼働候補の対策案',F.power.n>0?'red':'green',
-        'PC稼働ログ上、初回から最終ログまでの時間幅が設定値を超えた端末を '+fmtInt(F.power.n)+'件・'+F.power.terms+'台（最長'+F.power.max+'h）検出しました。本指標のみでは連続通電・無人稼働を意味しないため、上位端末について用途確認が必要です。',
-        '（1）業務時間外の自動シャットダウン/スリープをポリシー適用（2）離席時の自動ロック（数分）を全社必須化（3）サーバ兼用機は用途登録して対象外に（4）検出上位端末の用途確認と電源状態確認の周知。','長時間稼働',fmtInt(F.power.n)+'件'));
+      children.push(insightCard('🔌','③ 電源付きっぱなしの対策案',F.power.n>0?'red':'green',
+        '長時間稼働 '+fmtInt(F.power.n)+'件・'+F.power.terms+'台（最長'+F.power.max+'h）を検出。無人・常時接続は不正アクセスやマルウェア拡大の温床。サーバ兼用機・夜間バッチ・外出時の消し忘れは業務上の理由があるため切り分けが必要。',
+        '（1）業務時間外の自動シャットダウン/スリープをポリシー適用（2）離席時の自動ロック（数分）を全社必須化（3）サーバ兼用機は用途登録して対象外に（4）検出上位端末の用途確認と消し忘れの周知徹底。','長時間稼働',fmtInt(F.power.n)+'件'));
       if(F.power.termTop.length) children.push(dfTable(['長時間稼働が多い端末','件数'],F.power.termTop.map(d=>[d[0],fmtInt(d[1])])));
       if(secs.focus_comment) children.push(commentBox(cmts.focus)); }
 
     if(secs.risk){ children.push(para(new PageBreak())); children.push(heading('8. リスク予測・想定インパクト（放置した場合）',RED)); children.push(para(run(' ')));
       const RC=global.RiskCalc, imp=RC.computeImpact(k,App.pc_f,App.longThreshold||12);
-      children.push(kpiRow([['情報漏洩 期待損失',fmtInt(imp.expLoss)+'万円','red'],['長時間稼働候補 電気代',imp.elecYen.toLocaleString()+'円',imp.elecYen>0?'yellow':'green'],['老朽デバイス 追加/年',fmtInt(imp.agingMan)+'万円',imp.agingMan>0?'yellow':'green']]));
+      children.push(kpiRow([['情報漏洩 期待損失',fmtInt(imp.expLoss)+'万円','red'],['電源つけっぱ 電気代',imp.elecYen.toLocaleString()+'円',imp.elecYen>0?'yellow':'green'],['老朽デバイス 追加/年',fmtInt(imp.agingMan)+'万円',imp.agingMan>0?'yellow':'green']]));
       children.push(insightCard('💰','想定インパクト合計（年換算）','red',
         '検出リスクを放置した場合の想定コストは年 約'+fmtInt(imp.totalMan)+'万円（前提：漏えい'+imp.assumptions.persons+'人・1件あたり'+round(imp.perIncidentMan,0)+'万円・発生確率'+imp.assumptions.prob+'%等）。対策コストがこれを下回るなら投資判断の根拠になります。',
         '対策（ポリシー整備・端末更新・自動シャットダウン・EDR・多要素認証等）を費用対効果で優先順位付けし、次年度予算へ計上してください。','想定合計',fmtInt(imp.totalMan)+'万円'));
@@ -530,7 +1163,7 @@
     // ② リスク・Web
     const ws2=wb.addWorksheet('②リスク・Webガバナンス',{pageSetup:{paperSize:8,orientation:'landscape',fitToPage:true,fitToWidth:1}});
     ws2.getCell('A1').value=`リスク・Webガバナンス分析　${c.period}`; ws2.getCell('A1').font={bold:true,size:14,name:'Meiryo'};
-    if((App.aiExcludeUsers||[]).length){ ws2.getCell('A2').value=`※AI正規利用除外が適用されています：登録ユーザーのAI外部サービスアクセスのみを集計から除外しています（他カテゴリは通常集計）。`; ws2.getCell('A2').font={italic:true,size:9,color:{argb:'FF7C3AED'},name:'Meiryo'}; }
+    if((App.aiExcludeDepts||[]).length){ ws2.getCell('A2').value=`※部署除外適用中：野良AI除外対象者が所属する部署「${App.aiExcludeDepts.join('・')}」を本シートの集計から除外しています。`; ws2.getCell('A2').font={italic:true,size:9,color:{argb:'FF7C3AED'},name:'Meiryo'}; }
     await addImg(ws2, CH.figCompanyGovernance(web), 900, 320, 0, 2);
     await addImg(ws2, CH.figCategoryBar(web), 450, 320, 0, 20);
     await addImg(ws2, CH.figMonthlyCategory(web,mj), 450, 320, 6, 20);
