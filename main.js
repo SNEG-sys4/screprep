@@ -8,7 +8,7 @@
     files:{hw:null,pc:null,ac:[]},
     hw:[],pc:[],ac:[], hw_f:[],pc_f:[],ac_f:[], kpis:{}, monthlyKpis:[],
     months:[], monthsJp:[], outCompanies:[],
-    cfg:{LATE_NIGHT_START:22, EARLY_MORNING_END:6, OVERTIME_THRESHOLD:20}, longThreshold:12,
+    cfg:{LATE_NIGHT_START:22, EARLY_MORNING_END:6, OVERTIME_THRESHOLD:20, HOLIDAY_MODE:'weekend'}, longThreshold:12,
     allMonths:[], allCompanies:[], allGroups:[],
     sel:{months:[],companies:[],groups:[]},
     aiExcludeUsers:[], aiExcludeDepts:[], // aiExcludeDepts は後方互換で残すがKPIロジックには使用しない
@@ -148,6 +148,17 @@
     const ot=document.getElementById('s-ot'), ln=document.getElementById('s-ln');
     ot.oninput=()=>{ App.cfg.OVERTIME_THRESHOLD=+ot.value; document.getElementById('v-ot').textContent=ot.value; applyFilters(); };
     ln.oninput=()=>{ App.cfg.LATE_NIGHT_START=+ln.value; document.getElementById('v-ln').textContent=ln.value; applyFilters(); };
+    // HOLIDAY_MODE 切り替えUI
+    const hm=document.getElementById('s-holiday-mode');
+    if(hm){
+      // 初期値をlocalStorageから復元
+      try{ const saved=localStorage.getItem('holidayMode'); if(saved){ App.cfg.HOLIDAY_MODE=saved; hm.value=saved; } }catch(e){}
+      hm.onchange=()=>{
+        App.cfg.HOLIDAY_MODE=hm.value;
+        try{ localStorage.setItem('holidayMode',hm.value); }catch(e){}
+        applyFilters();
+      };
+    }
     buildAiExcludeUI();
   }
   // チェック状態→App.aiExcludeUsers／App.aiExcludeDepts を更新するだけ（再描画はしない＝初期構築用）

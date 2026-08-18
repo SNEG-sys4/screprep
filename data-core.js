@@ -44,7 +44,55 @@
     LATE_NIGHT_START: 22,
     EARLY_MORNING_END: 6,
     OVERTIME_THRESHOLD: 20,
+    HOLIDAY_MODE: 'weekend', // 'weekend'=土日, 'sunday_holiday'=日曜+祝日
   };
+
+  // ── 日本の祁日データ（2024、2025、2026、2027年）──
+  // 出典：内閣府 国民の祝日一覧より手動登録
+  const JP_HOLIDAYS = new Set([
+    // 2024
+    '2024-01-01','2024-01-08','2024-02-11','2024-02-12','2024-02-23',
+    '2024-03-20','2024-04-29','2024-05-03','2024-05-04','2024-05-05','2024-05-06',
+    '2024-07-15','2024-08-11','2024-08-12','2024-09-16','2024-09-22','2024-09-23',
+    '2024-10-14','2024-11-03','2024-11-04','2024-11-23',
+    // 2025
+    '2025-01-01','2025-01-13','2025-02-11','2025-02-23','2025-02-24',
+    '2025-03-20','2025-04-29','2025-05-03','2025-05-04','2025-05-05','2025-05-06',
+    '2025-07-21','2025-08-11','2025-09-15','2025-09-21','2025-09-22','2025-09-23',
+    '2025-10-13','2025-11-03','2025-11-23','2025-11-24',
+    // 2026
+    '2026-01-01','2026-01-12','2026-02-11','2026-02-23',
+    '2026-03-20','2026-04-29','2026-05-03','2026-05-04','2026-05-05','2026-05-06',
+    '2026-07-20','2026-08-11','2026-09-21','2026-09-22','2026-09-23',
+    '2026-10-12','2026-11-03','2026-11-23',
+    // 2027
+    '2026-12-31',
+    '2027-01-01','2027-01-11','2027-02-11','2027-02-23',
+    '2027-03-21','2027-03-22','2027-04-29','2027-05-03','2027-05-04','2027-05-05',
+    '2027-07-19','2027-08-11','2027-09-20','2027-09-23',
+    '2027-10-11','2027-11-03','2027-11-23',
+  ]);
+
+  // 祁日判定：日付オブジェクトを渡す
+  function isJpHoliday(d) {
+    if (!d || isNaN(d.getTime())) return false;
+    const key = d.getFullYear() + '-' +
+      String(d.getMonth()+1).padStart(2,'0') + '-' +
+      String(d.getDate()).padStart(2,'0');
+    return JP_HOLIDAYS.has(key);
+  }
+
+  // 「休日」判定：Cfgの HOLIDAY_MODE に応じて切り替え
+  // weekend: 土日（時曜数>=5）
+  // sunday_holiday: 日曜＋祁日（土曜は通常の勤務日扱い）
+  function isHolidayRow(d, weekday, cfg) {
+    if (weekday === null) return false;
+    const mode = (cfg && cfg.HOLIDAY_MODE) || 'weekend';
+    if (mode === 'sunday_holiday') {
+      return weekday === 6 || isJpHoliday(d); // 日曜(6) or 祁日
+    }
+    return weekday >= 5; // 土日(5,6)
+  }
 
   const BASE_CLR = ['#2563EB','#059669','#D97706','#DC2626','#7C3AED','#EA580C','#0891B2','#BE185D'];
   const STATUS_COLORS = { green:'#059669', yellow:'#D97706', red:'#DC2626' };
@@ -181,7 +229,7 @@
       r['月'] = ymKey(d);
       r['月_表示'] = r['月'] ? fmtMonth(r['月']) : null;
       r['曜日'] = d ? ((d.getDay()+6)%7) : null; // 0=月..6=日
-      r['休日'] = r['曜日'] !== null ? r['曜日'] >= 5 : false;
+      r['休日'] = isHolidayRow(d, r['曜日'], cfg);
       r['開始時刻'] = combineDateTime(d, r['初回ログ時刻']);
       r['終了時刻'] = combineDateTime(d, r['最終ログ時刻']);
       r['ログ時間_分'] = hmToMinutes(r['ログ時間']);
@@ -201,6 +249,8 @@
       r['時間外稼働'] = (endH !== null && endH >= cfg.OVERTIME_THRESHOLD);
       // P0-6: loadPcと同一のisLateNight関数を使用（終了のみ判定から変更）
       r['深夜稼働'] = isLateNight(r, cfg);
+      // HOLIDAY_MODE変更時に休日判定も再計算
+      r['休日'] = isHolidayRow(r['日付_dt'], r['曜日'], cfg);
     }
     return rows;
   }
@@ -386,7 +436,7 @@
     SITE_GOVERNANCE, THRESHOLDS, DEFAULTS, BASE_CLR, STATUS_COLORS, STATUS_LABELS,
     isNil, classifyUrl, fmtMonth, getStatus, parsePcDate, hmToMinutes, combineDateTime,
     ymKey, parseDateLoose, num, strip,
-    loadHw, isLateNight, loadPc, recomputePcFlags, loadAc, joinLedgers,
+    loadHw, isLateNight, isHolidayRow, isJpHoliday, loadPc, recomputePcFlags, loadAc, joinLedgers,
     groupBy, mean, sum, uniqueCount, round, calcGovernanceKpis, computeWebGovernance,
   };
 });

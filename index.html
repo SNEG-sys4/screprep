@@ -143,6 +143,12 @@ table.dt tr:nth-child(even) td { background:#f8fafc; }
           <input type="range" id="s-ot" min="17" max="23" value="20">
           <label style="margin-top:12px">深夜稼働：開始時刻 <span class="slider-val" id="v-ln">22</span>時</label>
           <input type="range" id="s-ln" min="20" max="24" value="22">
+          <label style="margin-top:12px;font-weight:700;font-size:.78rem;color:#475569;display:block">📅 「土日稼働」の定義</label>
+          <select id="s-holiday-mode" style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:5px 8px;font-size:.82rem;font-family:inherit">
+            <option value="weekend">土曜＋日曜（デフォルト）</option>
+            <option value="sunday_holiday">日曜＋祝日のみ（土曜出勤ありの場合）</option>
+          </select>
+          <p class="hint" style="margin:4px 0 0;font-size:.75rem">祝日は日本の国民の祝日（2024、2027年）を内蔵。変更は即時反映されます。</p>
         </div>
       </div>
       <div style="margin-top:16px">
